@@ -10,6 +10,10 @@
 
 Companies that hold valuable know-how (lectures, interviews, calls, manuals) cannot always send it to a public AI service. TranscriptLab runs the heavy work on your own machine: speech-to-text with OpenAI Whisper, document conversion with MarkItDown, and cleaning rules that make the output consistent. The result is a folder of tidy Markdown files with metadata headers, which is the raw material for a retrieval-augmented generation (RAG) pipeline or later fine-tuning.
 
+## How it works
+
+<p align="center"><img src="docs/screenshots/how-it-works.png" alt="How it works" width="900"></p>
+
 ## What it does
 
 The app is a Tkinter desktop GUI with one tab per job:
