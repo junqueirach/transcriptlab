@@ -44,7 +44,6 @@ Only transcribe or download material you have the right to use. The repository c
 
 - About 27,000 lines of Python in one file, organised in clear sections
 - More than 70 numbered versions, from a 35 KB prototype to the current build (see `archive/versions/`)
-- `prompts/` holds the written briefs used to direct each major version (some are in Portuguese)
 - `docs/legacy/` has the first READMEs
 
 ## Roadmap
@@ -57,7 +56,7 @@ Only transcribe or download material you have the right to use. The repository c
 
 ## How this was built
 
-Built with **Claude (Anthropic)** as the coding partner. I wrote the requirements and the revision prompts, tested every build on real data, and decided what to fix next. The `archive/versions/` folder keeps every earlier release so the iteration history is visible, and `prompts/` shows the briefs I gave Claude. See [ai-assisted-development](https://github.com/junqueirach/ai-assisted-development) for the method.
+Built with **Claude (Anthropic)** as the coding partner. I wrote the requirements and the revision prompts, tested every build on real data, and decided what to fix next. The `archive/versions/` folder keeps every earlier release so the iteration history is visible.
 
 **Security note:** the app stores any API keys you enter in a local settings file outside this repository. `.gitignore` excludes config and settings files so keys are never committed.
 
