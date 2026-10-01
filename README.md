@@ -6,6 +6,10 @@
 
 <p align="center"><img src="docs/screenshots/transcriptlab.png" alt="TranscriptLab screenshot" width="900"></p>
 
+**Download for Windows:** get the ready-to-run `.exe` from the [latest release](https://github.com/junqueirach/transcriptlab/releases/latest). No Python needed.
+
+> **Windows SmartScreen:** the file is not code-signed, so Windows may show "Windows protected your PC". Click **More info**, then **Run anyway**. You can also run the app from source (see Quick start) and read every line of the code first.
+
 ## Why it exists
 
 Companies that hold valuable know-how (lectures, interviews, calls, manuals) cannot always send it to a public AI service. TranscriptLab runs the heavy work on your own machine: speech-to-text with OpenAI Whisper, document conversion with MarkItDown, and cleaning rules that make the output consistent. The result is a folder of tidy Markdown files with metadata headers, which is the raw material for a retrieval-augmented generation (RAG) pipeline or later fine-tuning.
