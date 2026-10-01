@@ -1,0 +1,3279 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+TranscriptLab - GUI
+===================
+Batch-transcribe video/audio with OpenAI Whisper (CLI) and turn the result
+into clean, AI-ready Markdown via MarkItDown.
+
+VERSIONING NOTE (read me):
+    APP_VERSION below follows Semantic Versioning (MAJOR.MINOR.PATCH).
+    ALWAYS bump it when the code changes:
+      - PATCH: bug fixes / tiny tweaks (0.6.0 -> 0.6.1)
+      - MINOR: new backward-compatible features (0.6.0 -> 0.7.0)
+      - MAJOR: breaking changes (0.6.0 -> 1.0.0)
+    The About dialog shows this value.
+
+Requirements:
+    - Python 3.9+ (Tkinter included by default on Windows)
+    - Whisper (https://github.com/openai/whisper)
+    - MarkItDown (https://github.com/microsoft/markitdown) for the MD features
+    - ffmpeg recommended (Whisper needs it for most formats; also enables % bar)
+
+Author: Luiz Junqueira & Claude AI
+"""
+
+APP_VERSION = "0.6.0"
+APP_NAME = "TranscriptLab"
+APP_AUTHOR = "Luiz Junqueira & Claude AI"
+APP_CONTACT = "USEReira.ch@gmail.com"
+
+import os
+import re
+import sys
+import json
+import time
+import queue
+import shutil
+import zipfile
+import tarfile
+import threading
+import subprocess
+import webbrowser
+import urllib.request
+from pathlib import Path
+from datetime import datetime
+
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox, simpledialog
+
+# ==========================================================================
+# Paths / persistence
+# ==========================================================================
+
+CONFIG_DIR = Path.home() / ".whisper_transcriber"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+DICTIONARIES_FILE = CONFIG_DIR / "dictionaries.json"
+FFMPEG_INSTALL_DIR = CONFIG_DIR / "ffmpeg"
+
+DEFAULT_WHISPER_PATHS = [
+    r"C:\WhisperWorkspace\venv\Scripts\whisper.exe",
+]
+
+# App icon (64x64 PNG, base64). Film strip + document/MD motif.
+APP_ICON_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAABt0lEQVR4nO2bMVLDQAxF1wwn4AL4DClcMhS0"
+    "tMAVUgMNFIwLaICaKyS0tBQZyhScIVyAK5iCWWaIvWtp45V2V3pNJuN1pP+tlTUexxhFUSRThZx0ePPUTZ3"
+    "IFHw9XKH1oE5IVfg2GCNAC3MRvg3EiL2xBbmKNwaWu9eAnMVbxjQ4DShBvMWnZXQLlM6gASVdfYtL0z70B75"
+    "fHsHBDubX4LXc9CqgxKtvGdImvgeAt4DlffXhPHZyfLRTMhygDQhlc39JFcrUt8/gteK3gBrAnQA36B6QY6Pz"
+    "oRVAFQjTmSkRPweI3wLiDSDrAa/np/++N1Vr1t1dlFhnyzfwWjIDLE3VUof0QjYHpCbcEr0CNhefsUPsRDQDU"
+    "hduiTYH1IuZMcZvBKZZxSL6bbBezP7MSBGyOSBVI8jngHX3+9lUbW82wDLFFmKbBGMNQVj0eQB3AtyIN4DseU"
+    "AK9/whxFeAeAPYngfEIGSbaQVgT9A5oDDEG6BzAHcC3KgB3Alw0zMg5JXzXBjSJn4OcF7t0t4XdFW29gDXgZJ"
+    "6gU+LtwJKMGFMw+gWyNkESO76p6mQAKkakXO1KorCww9zc3qp0AMSaAAAAABJRU5ErkJggg=="
+)
+
+# --- Interface languages ---------------------------------------------------
+UI_LANGUAGES = [("pt", "Português"), ("en", "English")]
+
+# --- Audio language built-ins (code -> whisper --language param) -----------
+AUDIO_LANG_OPTIONS = {
+    "auto": {"param": None},
+    "pt": {"param": "Portuguese"},
+    "en": {"param": "English"},
+    "es": {"param": "Spanish"},
+}
+DEFAULT_AUDIO_LANGS = ["auto", "pt", "en", "es"]
+
+# Full Whisper language set (code -> English name). Used by the "Add languages"
+# manager. Whisper's --language accepts the English name.
+WHISPER_LANGUAGES = {
+    "en": "English", "zh": "Chinese", "de": "German", "es": "Spanish",
+    "ru": "Russian", "ko": "Korean", "fr": "French", "ja": "Japanese",
+    "pt": "Portuguese", "tr": "Turkish", "pl": "Polish", "ca": "Catalan",
+    "nl": "Dutch", "ar": "Arabic", "sv": "Swedish", "it": "Italian",
+    "id": "Indonesian", "hi": "Hindi", "fi": "Finnish", "vi": "Vietnamese",
+    "he": "Hebrew", "uk": "Ukrainian", "el": "Greek", "ms": "Malay",
+    "cs": "Czech", "ro": "Romanian", "da": "Danish", "hu": "Hungarian",
+    "ta": "Tamil", "no": "Norwegian", "th": "Thai", "ur": "Urdu",
+    "hr": "Croatian", "bg": "Bulgarian", "lt": "Lithuanian", "la": "Latin",
+    "mi": "Maori", "ml": "Malayalam", "cy": "Welsh", "sk": "Slovak",
+    "te": "Telugu", "fa": "Persian", "lv": "Latvian", "bn": "Bengali",
+    "sr": "Serbian", "az": "Azerbaijani", "sl": "Slovenian", "kn": "Kannada",
+    "et": "Estonian", "mk": "Macedonian", "br": "Breton", "eu": "Basque",
+    "is": "Icelandic", "hy": "Armenian", "ne": "Nepali", "mn": "Mongolian",
+    "bs": "Bosnian", "kk": "Kazakh", "sq": "Albanian", "sw": "Swahili",
+    "gl": "Galician", "mr": "Marathi", "pa": "Punjabi", "si": "Sinhala",
+    "km": "Khmer", "sn": "Shona", "yo": "Yoruba", "so": "Somali",
+    "af": "Afrikaans", "oc": "Occitan", "ka": "Georgian", "be": "Belarusian",
+    "tg": "Tajik", "sd": "Sindhi", "gu": "Gujarati", "am": "Amharic",
+    "yi": "Yiddish", "lo": "Lao", "uz": "Uzbek", "fo": "Faroese",
+    "ht": "Haitian creole", "ps": "Pashto", "tk": "Turkmen", "nn": "Nynorsk",
+    "mt": "Maltese", "sa": "Sanskrit", "lb": "Luxembourgish", "my": "Myanmar",
+    "bo": "Tibetan", "tl": "Tagalog", "mg": "Malagasy", "as": "Assamese",
+    "tt": "Tatar", "haw": "Hawaiian", "ln": "Lingala", "ha": "Hausa",
+    "ba": "Bashkir", "jw": "Javanese", "su": "Sundanese",
+}
+
+TASK_KEYS = ["transcribe", "translate"]
+
+# Output formats. 'md' is produced by TranscriptLab (not by whisper directly).
+OUTPUT_FORMATS = ["txt", "srt", "vtt", "json", "tsv", "md"]
+WHISPER_FORMATS = ["txt", "srt", "vtt", "json", "tsv"]   # produced by whisper
+TEXT_REPLACE_FORMATS = ["txt", "srt", "vtt", "tsv", "md"]  # dict find/replace
+
+# Catalog: (cli_name, english_only, size_mb, vram_gb, desc_key)
+MODEL_CATALOG = [
+    ("tiny",      False, 75,   1, "model_tiny"),
+    ("tiny.en",   True,  75,   1, "model_tiny_en"),
+    ("base",      False, 145,  1, "model_base"),
+    ("base.en",   True,  145,  1, "model_base_en"),
+    ("small",     False, 480,  2, "model_small"),
+    ("small.en",  True,  480,  2, "model_small_en"),
+    ("medium",    False, 1500, 5, "model_medium"),
+    ("medium.en", True,  1500, 5, "model_medium_en"),
+    ("turbo",     False, 1600, 6, "model_turbo"),
+    ("large",     False, 2900, 10, "model_large"),
+]
+MODEL_INFO = {row[0]: {"english_only": row[1], "size_mb": row[2],
+                       "vram_gb": row[3], "desc_key": row[4]}
+              for row in MODEL_CATALOG}
+ALL_MODEL_CLIS = [row[0] for row in MODEL_CATALOG]
+
+MEDIA_EXTENSIONS = (".mkv", ".mp4", ".mp3", ".wav", ".m4a", ".webm",
+                    ".avi", ".mov", ".flac", ".ogg")
+
+# Inputs accepted in the MD File Generation tab (what MarkItDown / our cleaner
+# can handle).
+MARKITDOWN_EXTENSIONS = (".pdf", ".docx", ".pptx", ".xlsx", ".xls", ".csv",
+                         ".json", ".xml", ".html", ".htm", ".txt", ".md",
+                         ".rtf", ".epub", ".srt", ".vtt")
+SUBTITLE_EXTENSIONS = (".srt", ".vtt")
+
+ST_PENDING = "pending"
+ST_RUNNING = "running"
+ST_DONE = "done"
+ST_ERROR = "error"
+ST_SKIPPED = "skipped"
+ST_TERMINAL = (ST_DONE, ST_ERROR, ST_SKIPPED)
+
+FFMPEG_DOWNLOAD_URL = "https://ffmpeg.org/download.html"
+# Static ffmpeg build (Windows) used by the auto-download installer.
+FFMPEG_WIN_BUILD_URL = (
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
+    "ffmpeg-master-latest-win64-gpl.zip"
+)
+
+
+# ==========================================================================
+# Translations
+# ==========================================================================
+
+TRANSLATIONS = {
+    "pt": {
+        "window_title": APP_NAME,
+        "tab_transcription": "Transcrição",
+        "tab_dictionary": "Dicionário de Vocabulário",
+        "tab_md": "Geração de MD",
+        # Menubar
+        "menu_settings": "Configurações",
+        "menu_about": "Sobre",
+        "menu_whisper": "Whisper...",
+        "menu_markitdown": "MarkItDown...",
+        "menu_ffmpeg": "FFmpeg...",
+        "menu_output_formats": "Formatos de saída...",
+        "menu_interface_language": "Idioma da interface",
+        # Status indicators (linha 1)
+        "dep_whisper": "Whisper",
+        "dep_markitdown": "MarkItDown",
+        "dep_ffmpeg": "FFmpeg",
+        "dep_found": "✓",
+        "dep_missing": "✗",
+        "dep_hint": "(clique para configurar)",
+        # Main controls remaining
+        "audio_language": "Idioma do áudio:",
+        "ai_model": "Modelo de IA:",
+        "add_languages": "Adicionar idiomas...",
+        "add_model": "Adicionar modelo...",
+        "task": "Tarefa:",
+        "vocab_dict": "Dicionário de vocabulário:",
+        "none": "(Nenhum)",
+        "model_status": "Status do modelo:",
+        "no_models_installed": "Nenhum modelo instalado — use 'Adicionar modelo...' para baixar um.",
+        "output_folder": "Pasta de saída:",
+        "same_folder": "Mesma pasta de cada arquivo",
+        "fixed_folder": "Pasta fixa:",
+        "browse": "Procurar...",
+        # Tasks
+        "task_transcribe": "Transcrever (mesmo idioma)",
+        "task_translate": "Traduzir para Inglês",
+        # Audio langs (built-ins)
+        "audlang_auto": "Detectar automaticamente",
+        "audlang_portuguese": "Português (PT-BR)",
+        "audlang_english": "Inglês (EN)",
+        "audlang_spanish": "Espanhol (ES)",
+        # Model descriptions
+        "model_tiny": "mais rápido, menor precisão",
+        "model_tiny_en": "só Inglês, mais rápido",
+        "model_base": "rápido, precisão básica",
+        "model_base_en": "só Inglês",
+        "model_small": "bom equilíbrio velocidade/precisão",
+        "model_small_en": "só Inglês",
+        "model_medium": "excelente precisão, mais lento",
+        "model_medium_en": "só Inglês",
+        "model_turbo": "rápido, ótima precisão multilíngue",
+        "model_large": "máxima precisão, mais lento e pesado",
+        "model_downloaded": "✓ Já baixado no cache  ({size}, ~{vram} GB VRAM recomendado)",
+        "model_not_downloaded": "✗ NÃO baixado ainda  ({size} para baixar, ~{vram} GB VRAM recomendado)",
+        # Output formats (dialog)
+        "output_formats": "Formatos de saída (marque o que deseja manter):",
+        "output_formats_title": "Formatos de saída",
+        "fmt_txt": "TXT — texto puro, sem marcação de tempo. Ideal para ler/estudar.",
+        "fmt_srt": "SRT — legenda com tempos. Use em players de vídeo (YouTube, VLC).",
+        "fmt_vtt": "VTT — legenda para web (HTML5). Semelhante ao SRT.",
+        "fmt_json": "JSON — dados completos (tempos por palavra/segmento) para uso técnico.",
+        "fmt_tsv": "TSV — tabela (início, fim, texto) para abrir em Excel/planilhas.",
+        "fmt_md": "MD — transcrição limpa (prosa, sem tempos), ideal para uso com IA.",
+        # Queue
+        "queue_frame": "Fila de Transcrição",
+        "add_files": "+ Adicionar arquivos...",
+        "remove_selected": "Remover selecionado",
+        "clear_queue": "Limpar fila",
+        "move_up": "Mover para cima",
+        "move_down": "Mover para baixo",
+        "col_order": "#",
+        "col_file": "Arquivo",
+        "col_folder": "Pasta",
+        "col_status": "Status",
+        "status_pending": "Pendente",
+        "status_running": "Transcrevendo...",
+        "status_running_md": "Convertendo...",
+        "status_done": "Concluído",
+        "status_error": "Erro",
+        "status_skipped": "Cancelado",
+        # Execution
+        "start_batch": "Iniciar Transcrição em Lote",
+        "start_batch_md": "Iniciar Conversão em Lote",
+        "cancel": "Cancelar",
+        "waiting_start": "Aguardando início...",
+        "open_output_folder": "Abrir pasta de saída",
+        "batch_progress": "Processando {done}/{total}",
+        "preparing": "preparando...",
+        "elapsed": "decorrido {elapsed}",
+        "eta": "ETA {eta}",
+        "position": "posição {pos}",
+        "batch_finished_label": "Finalizado: {done} concluído(s), {errors} erro(s)",
+        # Log
+        "log_frame": "Atividade do Whisper (saída em tempo real)",
+        "log_frame_md": "Atividade do MarkItDown (saída em tempo real)",
+        "log_batch_start": "Lote iniciado em {time}\n",
+        "log_batch_end": "\nLote finalizado em {time}\n",
+        "log_canceling": "\n[CANCELANDO] Interrompendo após o arquivo atual...\n",
+        "log_file_start": "\n{sep}\n[{i}/{n}] Iniciando: {name}\n{sep}\n",
+        "log_probing": "Analisando duração do áudio com ffmpeg...\n",
+        "log_duration_ok": "Duração detectada: {dur}\n",
+        "log_duration_fail": "Não foi possível detectar a duração (ffmpeg ausente ou formato não lido); a barra mostrará apenas atividade.\n",
+        "log_cmd": "Comando: {cmd}\n\n",
+        "log_file_done": "\n[OK] Concluído: {name}\n",
+        "log_file_error": "\n[ERRO] Falha em {name}: {e}\n",
+        "log_dict_warn": "[AVISO] Não foi possível aplicar dicionário em {path}: {e}\n",
+        "log_md_make": "Gerando MD limpo a partir da legenda...\n",
+        "log_md_markitdown": "Convertendo com MarkItDown: {name}\n",
+        "log_download_start": "Iniciando download do modelo '{model}' ({size})...\n",
+        "log_download_dest": "Destino: {dest}\n\n",
+        "log_model_ok": "\n[OK] Modelo confirmado no cache local.\n",
+        # Dialogs / messages
+        "warn": "Aviso",
+        "error": "Erro",
+        "info": "Informação",
+        "confirm": "Confirmar",
+        "saved": "Salvo",
+        "close": "Fechar",
+        "err_no_files": "Adicione pelo menos um arquivo à fila.",
+        "err_no_whisper": "Whisper não foi encontrado. Abra Configurações → Whisper para localizar ou instalar.",
+        "err_no_markitdown": "MarkItDown não foi encontrado. Abra Configurações → MarkItDown para instalá-lo.",
+        "err_no_model_selected": "Nenhum modelo de IA instalado/selecionado. Use 'Adicionar modelo...' para baixar um.",
+        "err_no_format": "Selecione pelo menos um formato de saída (Configurações → Formatos de saída).",
+        "err_no_fixed_dir": "Selecione a pasta de saída fixa ou troque para 'mesma pasta de cada arquivo'.",
+        "warn_path_not_found": "O caminho '{path}' não foi encontrado no disco.\nDeseja tentar executar mesmo assim (ex: caso esteja no PATH do sistema)?",
+        "warn_queue_locked": "Não é possível editar a fila durante o processamento.",
+        "info_all_in_queue": "Todos os arquivos selecionados já estão na fila.",
+        "select_media_title": "Selecione um ou mais arquivos de mídia (pode repetir em pastas diferentes)",
+        "select_doc_title": "Selecione arquivos para converter em MD",
+        "media_files": "Arquivos de mídia",
+        "doc_files": "Documentos suportados",
+        "all_files": "Todos os arquivos",
+        "select_whisper_title": "Selecione o executável do whisper",
+        "select_ffmpeg_title": "Selecione o executável do ffmpeg",
+        "executable": "Executável",
+        "select_output_title": "Selecione a pasta de saída",
+        "cancel_title": "Cancelar",
+        "cancel_question": "Cancelar o lote? O arquivo atual será interrompido.",
+        "exit_title": "Sair",
+        "exit_question": "Um processamento está em andamento. Sair mesmo assim?",
+        "finished_with_errors_title": "Concluído com erros",
+        "finished_with_errors_msg": "{done} arquivo(s) concluídos, {errors} com erro. Veja o log para detalhes.",
+        "finished_title": "Concluído",
+        "finished_msg": "Todos os {done} arquivo(s) foram processados com sucesso.",
+        "ffmpeg_missing_warn": "ffmpeg não foi encontrado. O Whisper precisa dele para ler a maioria dos formatos de áudio/vídeo, então a transcrição pode falhar. Você pode continuar mesmo assim (arquivos .wav às vezes funcionam sem ffmpeg).\n\nDeseja continuar?",
+        # Settings: Whisper
+        "set_whisper_title": "Configurações — Whisper",
+        "set_whisper_exe": "Executável do Whisper:",
+        "set_whisper_install": "Instalar Whisper (global)",
+        "set_whisper_install_q": "Instalar o Whisper globalmente usando pip?\n\nComando:\n{cmd}\n\nIsto pode baixar vários GB (inclui o PyTorch) e demorar bastante. Continuar?",
+        "set_whisper_found": "✓ Whisper encontrado: {path}",
+        "set_whisper_missing": "✗ Whisper não encontrado neste computador.",
+        "set_models_title": "Modelos de IA (instalados ficam disponíveis no menu principal):",
+        "set_models_download": "Baixar modelo selecionado",
+        "set_langs_title": "Idiomas do áudio disponíveis no menu principal:",
+        "set_lang_add": "Adicionar →",
+        "set_lang_remove": "← Remover",
+        "set_lang_pick": "Idioma para adicionar:",
+        "installed_tag": "  [instalado]",
+        "not_installed_tag": "",
+        # Settings: MarkItDown
+        "set_markitdown_title": "Configurações — MarkItDown",
+        "set_markitdown_about": "O MarkItDown converte documentos (PDF, DOCX, etc.) em Markdown. É usado na aba 'Geração de MD'.",
+        "set_markitdown_found": "✓ MarkItDown encontrado (interpretador: {py}).",
+        "set_markitdown_missing": "✗ MarkItDown não encontrado.",
+        "set_markitdown_install": "Instalar MarkItDown (global)",
+        "set_markitdown_install_q": "Instalar o MarkItDown globalmente usando pip?\n\nComando:\n{cmd}\n\nContinuar?",
+        "set_recheck": "Verificar novamente",
+        # Settings: FFmpeg
+        "set_ffmpeg_title": "Configurações — FFmpeg",
+        "set_ffmpeg_found": "✓ FFmpeg encontrado: {path}",
+        "set_ffmpeg_missing": "✗ FFmpeg não encontrado.",
+        "ffmpeg_locate": "Localizar...",
+        "ffmpeg_open_folder": "Abrir pasta",
+        "set_ffmpeg_install_auto": "Baixar e instalar automaticamente",
+        "set_ffmpeg_winget": "Instalar via winget",
+        "set_ffmpeg_open_page": "Abrir página de download",
+        "set_ffmpeg_auto_q": "Baixar uma versão pronta do ffmpeg e instalá-la em:\n{dest}\n\nIsto baixa ~80 MB. Continuar?",
+        "set_ffmpeg_downloading": "Baixando ffmpeg... aguarde.\n",
+        "set_ffmpeg_extracting": "Extraindo...\n",
+        "set_ffmpeg_done": "✓ FFmpeg instalado em: {path}\n",
+        "set_ffmpeg_fail": "✗ Falha ao instalar o ffmpeg automaticamente: {e}\nUse 'Abrir página de download' para instalar manualmente.\n",
+        # Settings: interface language
+        "lang_english": "English",
+        "lang_portuguese": "Português",
+        # Install (generic)
+        "install_running": "Executando, acompanhe abaixo...\n",
+        "install_done_ok": "\n[OK] Concluído com sucesso.\n",
+        "install_done_fail": "\n[ERRO] O processo terminou com código {code}.\n",
+        "install_log_title": "Saída:",
+        # About
+        "about_title": "Sobre o TranscriptLab",
+        "about_version": "Versão",
+        "about_author": "Autor",
+        "about_contact": "Contato",
+        # Dictionaries
+        "saved_profiles": "Perfis salvos:",
+        "new": "Novo",
+        "duplicate": "Duplicar",
+        "delete": "Excluir",
+        "edit_profile": "Editar Perfil",
+        "profile_name": "Nome do perfil:",
+        "priming_help": ("Texto de priming (--initial_prompt)\n"
+                         "Uma frase curta e natural com os nomes próprios e termos técnicos escritos "
+                         "exatamente como devem aparecer. O Whisper usa isso como uma \"dica\" para "
+                         "grafar esses termos corretamente desde o começo.\n"
+                         "Exemplo: A Dra. Ana Costa explica a fotossíntese, as mitocôndrias e o ciclo de Krebs."),
+        "replacements_help": ("Substituições pós-transcrição (uma por linha, formato:  errado=correto)\n"
+                              "Correções automáticas aplicadas DEPOIS que o Whisper termina, direto nos arquivos de "
+                              "texto. Úteis para erros que se repetem sempre. Diferencia maiúsculas de minúsculas.\n"
+                              "Exemplo: ciclo de crebs=ciclo de Krebs"),
+        "save_profile": "Salvar Perfil",
+        "dup_title": "Duplicar Perfil",
+        "dup_prompt": "Nome do novo perfil:",
+        "dup_suffix": " (cópia)",
+        "err_dup_exists": "Já existe um perfil com esse nome.",
+        "select_to_duplicate": "Selecione um perfil para duplicar.",
+        "delete_question": "Excluir o perfil '{name}'?",
+        "err_no_profile_name": "Dê um nome ao perfil antes de salvar.",
+        "profile_saved_msg": "Perfil '{name}' salvo com sucesso.",
+        # Clipping
+        "clip_frame": "Transcrever apenas um trecho (opcional)",
+        "clip_enable": "Transcrever somente de um ponto a outro do vídeo/áudio",
+        "clip_start": "Início:",
+        "clip_end": "Fim:",
+        "clip_hint": "Formato H:MM:SS (ex.: 0:05:00 = 5 minutos). Deixe a caixa desmarcada para processar o arquivo inteiro.",
+        "clip_needs_ffmpeg": "Este recurso precisa do ffmpeg (usado para cortar o trecho antes de transcrever). Instale o ffmpeg em Configurações → FFmpeg para habilitá-lo.",
+        "err_clip_invalid": "Verifique os campos de início/fim do trecho. Use o formato H:MM:SS e garanta que o fim seja depois do início.",
+        "err_clip_needs_ffmpeg": "O recorte de trecho está marcado, mas o ffmpeg não foi encontrado. Instale o ffmpeg ou desmarque essa opção.",
+        "phase_preparing": "Carregando modelo e preparando o áudio... isso pode levar alguns minutos (a barra ficará completa quando a transcrição real começar).",
+        "phase_transcribing_note": "Transcrevendo...",
+        "partial_output_note": "Um arquivo '*.partial.txt' está sendo salvo continuamente nesta pasta como rede de segurança, caso o processo seja interrompido.",
+        # MD tab
+        "md_intro": "Converta documentos (PDF, DOCX, TXT, SRT, etc.) em Markdown limpo, pronto para uso com IA. Legendas (SRT/VTT) viram prosa sem marcações de tempo.",
+        "md_queue_frame": "Fila de Conversão",
+    },
+    "en": {
+        "window_title": APP_NAME,
+        "tab_transcription": "Transcription",
+        "tab_dictionary": "Vocabulary Dictionary",
+        "tab_md": "MD File Generation",
+        "menu_settings": "Settings",
+        "menu_about": "About",
+        "menu_whisper": "Whisper...",
+        "menu_markitdown": "MarkItDown...",
+        "menu_ffmpeg": "FFmpeg...",
+        "menu_output_formats": "Output formats...",
+        "menu_interface_language": "Interface language",
+        "dep_whisper": "Whisper",
+        "dep_markitdown": "MarkItDown",
+        "dep_ffmpeg": "FFmpeg",
+        "dep_found": "✓",
+        "dep_missing": "✗",
+        "dep_hint": "(click to configure)",
+        "audio_language": "Audio language:",
+        "ai_model": "AI model:",
+        "add_languages": "Add languages...",
+        "add_model": "Add model...",
+        "task": "Task:",
+        "vocab_dict": "Vocabulary dictionary:",
+        "none": "(None)",
+        "model_status": "Model status:",
+        "no_models_installed": "No models installed — use 'Add model...' to download one.",
+        "output_folder": "Output folder:",
+        "same_folder": "Same folder as each file",
+        "fixed_folder": "Fixed folder:",
+        "browse": "Browse...",
+        "task_transcribe": "Transcribe (same language)",
+        "task_translate": "Translate to English",
+        "audlang_auto": "Auto-detect",
+        "audlang_portuguese": "Portuguese (PT-BR)",
+        "audlang_english": "English (EN)",
+        "audlang_spanish": "Spanish (ES)",
+        "model_tiny": "fastest, lowest accuracy",
+        "model_tiny_en": "English only, fastest",
+        "model_base": "fast, basic accuracy",
+        "model_base_en": "English only",
+        "model_small": "good speed/accuracy balance",
+        "model_small_en": "English only",
+        "model_medium": "excellent accuracy, slower",
+        "model_medium_en": "English only",
+        "model_turbo": "fast, great multilingual accuracy",
+        "model_large": "maximum accuracy, slowest and heaviest",
+        "model_downloaded": "✓ Already in cache  ({size}, ~{vram} GB VRAM recommended)",
+        "model_not_downloaded": "✗ NOT downloaded yet  ({size} to download, ~{vram} GB VRAM recommended)",
+        "output_formats": "Output formats (check what you want to keep):",
+        "output_formats_title": "Output formats",
+        "fmt_txt": "TXT — plain text, no timestamps. Best for reading/studying.",
+        "fmt_srt": "SRT — subtitles with timing. Use in video players (YouTube, VLC).",
+        "fmt_vtt": "VTT — web subtitles (HTML5). Similar to SRT.",
+        "fmt_json": "JSON — full data (per-word/segment timing) for technical use.",
+        "fmt_tsv": "TSV — table (start, end, text) to open in Excel/spreadsheets.",
+        "fmt_md": "MD — clean transcript (prose, no timestamps), best for AI use.",
+        "queue_frame": "Transcription Queue",
+        "add_files": "+ Add files...",
+        "remove_selected": "Remove selected",
+        "clear_queue": "Clear queue",
+        "move_up": "Move up",
+        "move_down": "Move down",
+        "col_order": "#",
+        "col_file": "File",
+        "col_folder": "Folder",
+        "col_status": "Status",
+        "status_pending": "Pending",
+        "status_running": "Transcribing...",
+        "status_running_md": "Converting...",
+        "status_done": "Done",
+        "status_error": "Error",
+        "status_skipped": "Canceled",
+        "start_batch": "Start Batch Transcription",
+        "start_batch_md": "Start Batch Conversion",
+        "cancel": "Cancel",
+        "waiting_start": "Waiting to start...",
+        "open_output_folder": "Open output folder",
+        "batch_progress": "Processing {done}/{total}",
+        "preparing": "preparing...",
+        "elapsed": "elapsed {elapsed}",
+        "eta": "ETA {eta}",
+        "position": "position {pos}",
+        "batch_finished_label": "Finished: {done} done, {errors} error(s)",
+        "log_frame": "Whisper Activity (real-time output)",
+        "log_frame_md": "MarkItDown Activity (real-time output)",
+        "log_batch_start": "Batch started at {time}\n",
+        "log_batch_end": "\nBatch finished at {time}\n",
+        "log_canceling": "\n[CANCELING] Stopping after the current file...\n",
+        "log_file_start": "\n{sep}\n[{i}/{n}] Starting: {name}\n{sep}\n",
+        "log_probing": "Probing audio duration with ffmpeg...\n",
+        "log_duration_ok": "Detected duration: {dur}\n",
+        "log_duration_fail": "Could not detect duration (ffmpeg missing or format unreadable); the bar will show activity only.\n",
+        "log_cmd": "Command: {cmd}\n\n",
+        "log_file_done": "\n[OK] Finished: {name}\n",
+        "log_file_error": "\n[ERROR] Failed on {name}: {e}\n",
+        "log_dict_warn": "[WARNING] Could not apply dictionary to {path}: {e}\n",
+        "log_md_make": "Generating clean MD from the subtitle...\n",
+        "log_md_markitdown": "Converting with MarkItDown: {name}\n",
+        "log_download_start": "Starting download of model '{model}' ({size})...\n",
+        "log_download_dest": "Destination: {dest}\n\n",
+        "log_model_ok": "\n[OK] Model confirmed in local cache.\n",
+        "warn": "Warning",
+        "error": "Error",
+        "info": "Information",
+        "confirm": "Confirm",
+        "saved": "Saved",
+        "close": "Close",
+        "err_no_files": "Add at least one file to the queue.",
+        "err_no_whisper": "Whisper was not found. Open Settings → Whisper to locate or install it.",
+        "err_no_markitdown": "MarkItDown was not found. Open Settings → MarkItDown to install it.",
+        "err_no_model_selected": "No AI model installed/selected. Use 'Add model...' to download one.",
+        "err_no_format": "Select at least one output format (Settings → Output formats).",
+        "err_no_fixed_dir": "Select the fixed output folder or switch to 'same folder as each file'.",
+        "warn_path_not_found": "The path '{path}' was not found on disk.\nDo you want to try running it anyway (e.g. if it's on the system PATH)?",
+        "warn_queue_locked": "The queue cannot be edited during processing.",
+        "info_all_in_queue": "All selected files are already in the queue.",
+        "select_media_title": "Select one or more media files (you can repeat across folders)",
+        "select_doc_title": "Select files to convert to MD",
+        "media_files": "Media files",
+        "doc_files": "Supported documents",
+        "all_files": "All files",
+        "select_whisper_title": "Select the whisper executable",
+        "select_ffmpeg_title": "Select the ffmpeg executable",
+        "executable": "Executable",
+        "select_output_title": "Select the output folder",
+        "cancel_title": "Cancel",
+        "cancel_question": "Cancel the batch? The current file will be interrupted.",
+        "exit_title": "Exit",
+        "exit_question": "Processing is in progress. Exit anyway?",
+        "finished_with_errors_title": "Finished with errors",
+        "finished_with_errors_msg": "{done} file(s) finished, {errors} with error. See the log for details.",
+        "finished_title": "Finished",
+        "finished_msg": "All {done} file(s) were processed successfully.",
+        "ffmpeg_missing_warn": "ffmpeg was not found. Whisper needs it to read most audio/video formats, so transcription may fail. You can continue anyway (.wav files sometimes work without ffmpeg).\n\nContinue?",
+        "set_whisper_title": "Settings — Whisper",
+        "set_whisper_exe": "Whisper executable:",
+        "set_whisper_install": "Install Whisper (global)",
+        "set_whisper_install_q": "Install Whisper globally using pip?\n\nCommand:\n{cmd}\n\nThis may download several GB (includes PyTorch) and take a while. Continue?",
+        "set_whisper_found": "✓ Whisper found: {path}",
+        "set_whisper_missing": "✗ Whisper not found on this computer.",
+        "set_models_title": "AI models (installed ones appear in the main menu):",
+        "set_models_download": "Download selected model",
+        "set_langs_title": "Audio languages available in the main menu:",
+        "set_lang_add": "Add →",
+        "set_lang_remove": "← Remove",
+        "set_lang_pick": "Language to add:",
+        "installed_tag": "  [installed]",
+        "not_installed_tag": "",
+        "set_markitdown_title": "Settings — MarkItDown",
+        "set_markitdown_about": "MarkItDown converts documents (PDF, DOCX, etc.) into Markdown. It is used in the 'MD File Generation' tab.",
+        "set_markitdown_found": "✓ MarkItDown found (interpreter: {py}).",
+        "set_markitdown_missing": "✗ MarkItDown not found.",
+        "set_markitdown_install": "Install MarkItDown (global)",
+        "set_markitdown_install_q": "Install MarkItDown globally using pip?\n\nCommand:\n{cmd}\n\nContinue?",
+        "set_recheck": "Re-check",
+        "set_ffmpeg_title": "Settings — FFmpeg",
+        "set_ffmpeg_found": "✓ FFmpeg found: {path}",
+        "set_ffmpeg_missing": "✗ FFmpeg not found.",
+        "ffmpeg_locate": "Locate...",
+        "ffmpeg_open_folder": "Open folder",
+        "set_ffmpeg_install_auto": "Download and install automatically",
+        "set_ffmpeg_winget": "Install via winget",
+        "set_ffmpeg_open_page": "Open download page",
+        "set_ffmpeg_auto_q": "Download a ready-made ffmpeg build and install it to:\n{dest}\n\nThis downloads ~80 MB. Continue?",
+        "set_ffmpeg_downloading": "Downloading ffmpeg... please wait.\n",
+        "set_ffmpeg_extracting": "Extracting...\n",
+        "set_ffmpeg_done": "✓ FFmpeg installed at: {path}\n",
+        "set_ffmpeg_fail": "✗ Could not auto-install ffmpeg: {e}\nUse 'Open download page' to install it manually.\n",
+        "lang_english": "English",
+        "lang_portuguese": "Português",
+        "install_running": "Running, follow below...\n",
+        "install_done_ok": "\n[OK] Completed successfully.\n",
+        "install_done_fail": "\n[ERROR] Process ended with code {code}.\n",
+        "install_log_title": "Output:",
+        "about_title": "About TranscriptLab",
+        "about_version": "Version",
+        "about_author": "Author",
+        "about_contact": "Contact",
+        "saved_profiles": "Saved profiles:",
+        "new": "New",
+        "duplicate": "Duplicate",
+        "delete": "Delete",
+        "edit_profile": "Edit Profile",
+        "profile_name": "Profile name:",
+        "priming_help": ("Priming text (--initial_prompt)\n"
+                         "A short, natural sentence with the proper names and technical terms written "
+                         "exactly as they should appear. Whisper uses this as a \"hint\" to spell those "
+                         "terms correctly from the start.\n"
+                         "Example: Dr. Ana Costa explains photosynthesis, mitochondria and the Krebs cycle."),
+        "replacements_help": ("Post-transcription replacements (one per line, format:  wrong=correct)\n"
+                              "Automatic corrections applied AFTER Whisper finishes, directly in the text files. "
+                              "Useful for errors that repeat every time. Case-sensitive.\n"
+                              "Example: krebs cycle=Krebs cycle"),
+        "save_profile": "Save Profile",
+        "dup_title": "Duplicate Profile",
+        "dup_prompt": "New profile name:",
+        "dup_suffix": " (copy)",
+        "err_dup_exists": "A profile with that name already exists.",
+        "select_to_duplicate": "Select a profile to duplicate.",
+        "delete_question": "Delete the profile '{name}'?",
+        "err_no_profile_name": "Give the profile a name before saving.",
+        "profile_saved_msg": "Profile '{name}' saved successfully.",
+        "clip_frame": "Transcribe only part of the file (optional)",
+        "clip_enable": "Transcribe only from one point to another in the video/audio",
+        "clip_start": "Start:",
+        "clip_end": "End:",
+        "clip_hint": "Format H:MM:SS (e.g. 0:05:00 = 5 minutes). Leave unchecked to process the whole file.",
+        "clip_needs_ffmpeg": "This feature needs ffmpeg (used to cut the segment before transcribing). Install ffmpeg in Settings → FFmpeg to enable it.",
+        "err_clip_invalid": "Check the start/end fields. Use the H:MM:SS format and make sure the end is after the start.",
+        "err_clip_needs_ffmpeg": "Time-range clipping is checked, but ffmpeg was not found. Install ffmpeg or uncheck this option.",
+        "phase_preparing": "Loading the model and preparing the audio... this can take a few minutes (the bar will fill in once real transcription starts).",
+        "phase_transcribing_note": "Transcribing...",
+        "partial_output_note": "A '*.partial.txt' file is being saved continuously in this folder as a safety net in case the process is interrupted.",
+        "md_intro": "Convert documents (PDF, DOCX, TXT, SRT, etc.) into clean Markdown, ready for AI use. Subtitles (SRT/VTT) become prose with no timestamps.",
+        "md_queue_frame": "Conversion Queue",
+    },
+}
+
+
+# ==========================================================================
+# Config / pure utilities (testable without GUI)
+# ==========================================================================
+
+def ensure_config_dir():
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def load_json(path, default):
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return default
+    return default
+
+
+def save_json(path, data):
+    ensure_config_dir()
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def find_python_executable():
+    """A Python interpreter usable for pip / -m markitdown. Avoids a frozen exe."""
+    exe = sys.executable or ""
+    if exe and os.path.basename(exe).lower().startswith("python"):
+        return exe
+    for name in ("python", "python3", "py"):
+        w = shutil.which(name)
+        if w:
+            return w
+    return exe or "python"
+
+
+def find_whisper_path(saved_path=None):
+    if saved_path and os.path.exists(saved_path):
+        return saved_path
+    for p in DEFAULT_WHISPER_PATHS:
+        if os.path.exists(p):
+            return p
+    return shutil.which("whisper") or shutil.which("whisper.exe")
+
+
+def whisper_is_available(saved_path=None):
+    return bool(find_whisper_path(saved_path))
+
+
+def find_ffmpeg(saved_path=None):
+    if saved_path and os.path.exists(saved_path):
+        return saved_path
+    return shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
+
+
+def markitdown_python(config_data):
+    """Interpreter used to run markitdown (override or the app's python)."""
+    override = (config_data or {}).get("markitdown_python") or ""
+    if override and os.path.exists(override):
+        return override
+    return find_python_executable()
+
+
+def markitdown_is_available(python_exe):
+    """Fast probe: is the 'markitdown' module importable by python_exe?"""
+    if not python_exe:
+        return False
+    try:
+        proc = subprocess.run(
+            [python_exe, "-c",
+             "import importlib.util,sys;"
+             "sys.exit(0 if importlib.util.find_spec('markitdown') else 1)"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=20,
+            **subprocess_hidden_window_kwargs(),
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
+def subprocess_hidden_window_kwargs():
+    if os.name != "nt":
+        return {"creationflags": 0, "startupinfo": None}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    return {"creationflags": 0, "startupinfo": startupinfo}
+
+
+def subprocess_child_env():
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
+
+
+def whisper_cache_dir():
+    return os.path.join(str(Path.home()), ".cache", "whisper")
+
+
+def model_file_name(cli_name):
+    if cli_name == "turbo":
+        return "large-v3-turbo.pt"
+    return f"{cli_name}.pt"
+
+
+def is_model_downloaded(cli_name, cache_dir=None):
+    cache_dir = cache_dir or whisper_cache_dir()
+    path = os.path.join(cache_dir, model_file_name(cli_name))
+    return os.path.exists(path), path
+
+
+def installed_model_clis(cache_dir=None):
+    """Models actually present in the cache, in catalog order."""
+    cache_dir = cache_dir or whisper_cache_dir()
+    out = []
+    for cli in ALL_MODEL_CLIS:
+        if os.path.exists(os.path.join(cache_dir, model_file_name(cli))):
+            out.append(cli)
+    return out
+
+
+def models_for_audio_language(audio_lang_code, only_installed=False, cache_dir=None):
+    """Valid model CLIs; .en variants only when audio is English."""
+    is_english = (audio_lang_code == "en")
+    pool = installed_model_clis(cache_dir) if only_installed else ALL_MODEL_CLIS
+    return [cli for cli in pool
+            if not (MODEL_INFO[cli]["english_only"] and not is_english)]
+
+
+def audio_lang_param(code):
+    if code in AUDIO_LANG_OPTIONS:
+        return AUDIO_LANG_OPTIONS[code]["param"]
+    name = WHISPER_LANGUAGES.get(code)
+    return name if name else None
+
+
+def human_size(size_mb):
+    return f"{size_mb} MB" if size_mb < 1000 else f"{size_mb / 1000:.1f} GB"
+
+
+def fmt_hms(seconds):
+    if seconds is None or seconds < 0:
+        return "--:--"
+    seconds = int(seconds)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h > 0:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+_WHISPER_TIME_RE = re.compile(r"\[(\d{1,2}):(\d{2})(?::(\d{2}))?[.,]\d{1,3}\s*-->")
+
+
+def parse_whisper_position_seconds(line):
+    m = _WHISPER_TIME_RE.search(line)
+    if not m:
+        return None
+    a, b, c = m.group(1), m.group(2), m.group(3)
+    if c is not None:
+        return int(a) * 3600 + int(b) * 60 + int(c)
+    return int(a) * 60 + int(b)
+
+
+_FFMPEG_DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d{2}):(\d{2})\.(\d+)")
+
+
+def parse_ffmpeg_duration_seconds(text):
+    m = _FFMPEG_DURATION_RE.search(text or "")
+    if not m:
+        return None
+    h, mm, ss, frac = m.group(1), m.group(2), m.group(3), m.group(4)
+    total = int(h) * 3600 + int(mm) * 60 + int(ss)
+    try:
+        total += round(float("0." + frac))
+    except ValueError:
+        pass
+    return total
+
+
+def ffmpeg_probe_duration(ffmpeg_path, media_path, timeout=25):
+    if not ffmpeg_path or not os.path.exists(media_path):
+        return None
+    try:
+        proc = subprocess.run(
+            [ffmpeg_path, "-i", media_path],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout,
+            env=subprocess_child_env(), **subprocess_hidden_window_kwargs(),
+        )
+        return parse_ffmpeg_duration_seconds(proc.stdout)
+    except Exception:
+        return None
+
+
+def parse_replacements_text(raw):
+    replacements = []
+    for line in (raw or "").splitlines():
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        find, _, replace = line.partition("=")
+        find = find.strip()
+        replace = replace.strip()
+        if not find:
+            continue
+        replacements.append([find, replace])
+    return replacements
+
+
+# --------------------------------------------------------------------------
+# Subtitle -> clean prose (for AI-ready Markdown). MarkItDown passes SRT
+# timestamps/indices through verbatim, which is useless for AI training, so we
+# parse subtitles ourselves into timestamp-free paragraphs.
+# --------------------------------------------------------------------------
+
+def subtitle_to_prose(text, is_vtt=False, title=None):
+    lines = (text or "").splitlines()
+    cues = []
+    cur = []
+
+    def flush():
+        if cur:
+            t = " ".join(x.strip() for x in cur if x.strip())
+            t = re.sub(r"\s+", " ", t).strip()
+            if t:
+                cues.append(t)
+            cur.clear()
+
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            flush()
+            continue
+        if is_vtt and (line.upper().startswith("WEBVTT")
+                       or line.startswith("NOTE") or line.startswith("STYLE")
+                       or line.startswith("REGION")):
+            continue
+        if "-->" in line:
+            continue
+        if re.fullmatch(r"\d+", line):  # srt cue index
+            continue
+        cur.append(line)
+    flush()
+
+    # Drop consecutive duplicate cues (Whisper sometimes repeats a line).
+    deduped = []
+    for c in cues:
+        if not deduped or deduped[-1] != c:
+            deduped.append(c)
+
+    # Group cues into paragraphs at sentence boundaries.
+    paragraphs, buf = [], []
+    for c in deduped:
+        buf.append(c)
+        joined = " ".join(buf)
+        if re.search(r"[.!?…][\"'”’)\]]?$", c) and len(joined) >= 200:
+            paragraphs.append(joined)
+            buf = []
+    if buf:
+        paragraphs.append(" ".join(buf))
+
+    body = "\n\n".join(re.sub(r"[ \t]+", " ", p).strip()
+                       for p in paragraphs if p.strip())
+    if not body.strip():
+        return ""
+    header = f"# {title}\n\n" if title else ""
+    return header + body.strip() + "\n"
+
+
+def convert_subtitle_file_to_md(src_path, dst_path, title=None):
+    is_vtt = src_path.lower().endswith(".vtt")
+    with open(src_path, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+    prose = subtitle_to_prose(content, is_vtt=is_vtt, title=title)
+    with open(dst_path, "w", encoding="utf-8") as f:
+        f.write(prose)
+    return dst_path
+
+
+def build_markitdown_command(python_exe, src_path, dst_path):
+    return [python_exe, "-m", "markitdown", src_path, "-o", dst_path]
+
+
+def build_pip_install_command(python_exe, package):
+    return [python_exe, "-m", "pip", "install", "--upgrade", package]
+
+
+# --------------------------------------------------------------------------
+# Time-range clipping + timestamp shifting on output
+# --------------------------------------------------------------------------
+
+_HMS_INPUT_RE = re.compile(r"^\s*(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:[.,](\d{1,3}))?\s*$")
+
+
+def parse_hms_to_seconds(text):
+    if text is None:
+        return None
+    text = text.strip()
+    if not text:
+        return None
+    m = _HMS_INPUT_RE.match(text)
+    if not m:
+        return None
+    h, mm, ss, frac = m.group(1), m.group(2), m.group(3), m.group(4)
+    try:
+        total = int(mm) * 60 + int(ss)
+        if h:
+            total = int(h) * 3600 + total
+        if frac:
+            total += float("0." + frac)
+        return float(total)
+    except ValueError:
+        return None
+
+
+def seconds_to_hms_input(seconds):
+    if seconds is None:
+        return ""
+    seconds = max(0, int(round(seconds)))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}"
+
+
+def build_ffmpeg_clip_command(ffmpeg_path, src_path, dst_path, start_seconds, end_seconds):
+    duration = max(0.0, end_seconds - start_seconds)
+    return [ffmpeg_path, "-y", "-ss", f"{start_seconds:.3f}", "-i", src_path,
+            "-t", f"{duration:.3f}", "-c", "copy", dst_path]
+
+
+def shift_srt_vtt_timestamps(content, offset_seconds, is_vtt=False):
+    sep = "." if is_vtt else ","
+    pattern = re.compile(r"(\d{2}):(\d{2}):(\d{2})[.,](\d{3})")
+
+    def _shift(m):
+        h, mm, ss, ms = (int(m.group(1)), int(m.group(2)),
+                         int(m.group(3)), int(m.group(4)))
+        total_ms = ((h * 3600 + mm * 60 + ss) * 1000 + ms
+                    + int(round(offset_seconds * 1000)))
+        total_ms = max(0, total_ms)
+        h2, rem = divmod(total_ms, 3600_000)
+        m2, rem = divmod(rem, 60_000)
+        s2, ms2 = divmod(rem, 1000)
+        return f"{h2:02d}:{m2:02d}:{s2:02d}{sep}{ms2:03d}"
+
+    return pattern.sub(_shift, content)
+
+
+def shift_tsv_timestamps(content, offset_seconds):
+    offset_ms = int(round(offset_seconds * 1000))
+    lines = content.splitlines(keepends=False)
+    if not lines:
+        return content
+    out = [lines[0]]
+    for line in lines[1:]:
+        if not line.strip():
+            out.append(line)
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 2:
+            try:
+                parts[0] = str(int(parts[0]) + offset_ms)
+                parts[1] = str(int(parts[1]) + offset_ms)
+            except ValueError:
+                pass
+        out.append("\t".join(parts))
+    return "\n".join(out) + ("\n" if content.endswith("\n") else "")
+
+
+def shift_json_timestamps(content, offset_seconds):
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return content
+
+    def _bump(obj):
+        if isinstance(obj, dict):
+            for key in ("start", "end"):
+                if key in obj and isinstance(obj[key], (int, float)):
+                    obj[key] = obj[key] + offset_seconds
+            for v in obj.values():
+                _bump(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                _bump(v)
+
+    _bump(data)
+    return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def shift_output_timestamps(path, fmt, offset_seconds):
+    if offset_seconds == 0 or fmt in ("txt", "md") or not path or not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        if fmt == "srt":
+            content = shift_srt_vtt_timestamps(content, offset_seconds, is_vtt=False)
+        elif fmt == "vtt":
+            content = shift_srt_vtt_timestamps(content, offset_seconds, is_vtt=True)
+        elif fmt == "tsv":
+            content = shift_tsv_timestamps(content, offset_seconds)
+        elif fmt == "json":
+            content = shift_json_timestamps(content, offset_seconds)
+        else:
+            return
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+    except OSError:
+        pass
+
+
+# ==========================================================================
+# Queue item + partial writer + workers
+# ==========================================================================
+
+class QueueItem:
+    def __init__(self, filepath):
+        self.filepath = filepath
+        self.filename = os.path.basename(filepath)
+        self.status = ST_PENDING
+        self.error_message = ""
+        self.output_dir = None
+        self.output_txt = None
+        self.output_srt = None
+        self.output_md = None
+
+
+_WHISPER_SEGMENT_LINE_RE = re.compile(
+    r"^\[(\d{1,2}):(\d{2})(?::(\d{2}))?\.\d{1,3}\s*-->\s*"
+    r"(\d{1,2}):(\d{2})(?::(\d{2}))?\.\d{1,3}\]\s*(.*)$"
+)
+
+
+def parse_whisper_segment_line(line):
+    m = _WHISPER_SEGMENT_LINE_RE.match(line.strip())
+    if not m:
+        return None
+    sh, sm, ss, eh, em, es, text = m.groups()
+
+    def _to_seconds(h, mm, ss):
+        if ss is not None:
+            return int(h) * 3600 + int(mm) * 60 + int(ss)
+        return int(h) * 60 + int(mm)
+
+    start = _to_seconds(sh, sm, ss)
+    end = _to_seconds(eh, em, es)
+    return start, end, text
+
+
+class PartialTranscriptWriter:
+    def __init__(self, path):
+        self.path = path
+        self._fh = None
+
+    def open(self):
+        try:
+            self._fh = open(self.path, "w", encoding="utf-8")
+        except OSError:
+            self._fh = None
+
+    def write_segment(self, text):
+        if self._fh is None:
+            return
+        try:
+            self._fh.write(text)
+            if not text.endswith("\n"):
+                self._fh.write("\n")
+            self._fh.flush()
+            os.fsync(self._fh.fileno())
+        except (OSError, ValueError):
+            pass
+
+    def close(self):
+        if self._fh is not None:
+            try:
+                self._fh.close()
+            except OSError:
+                pass
+            self._fh = None
+
+    def discard(self):
+        self.close()
+        try:
+            if os.path.exists(self.path):
+                os.remove(self.path)
+        except OSError:
+            pass
+
+
+class ModelDownloadWorker(threading.Thread):
+    """Force a Whisper model download by running it over 1s of silence."""
+
+    def __init__(self, whisper_exe, model_name, event_queue, stop_flag):
+        super().__init__(daemon=True)
+        self.whisper_exe = whisper_exe
+        self.model_name = model_name
+        self.event_queue = event_queue
+        self.stop_flag = stop_flag
+        self.current_process = None
+
+    def post(self, kind, **kwargs):
+        self.event_queue.put({"kind": kind, **kwargs})
+
+    def _make_silent_wav(self, path, duration_seconds=1, sample_rate=16000):
+        import wave
+        import struct
+        n_frames = duration_seconds * sample_rate
+        with wave.open(path, "w") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(struct.pack("<h", 0) * n_frames)
+
+    def run(self):
+        tmp_dir = None
+        try:
+            import tempfile
+            tmp_dir = tempfile.mkdtemp(prefix="whisper_model_check_")
+            wav_path = os.path.join(tmp_dir, "silence.wav")
+            self._make_silent_wav(wav_path)
+            cmd = [self.whisper_exe, wav_path, "--model", self.model_name,
+                   "--language", "English", "--fp16", "False",
+                   "--output_dir", tmp_dir, "--output_format", "txt",
+                   "--verbose", "True"]
+            self.post("log", text="Command: " + " ".join(cmd) + "\n\n")
+            self.current_process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                encoding="utf-8", errors="replace", bufsize=1,
+                env=subprocess_child_env(), **subprocess_hidden_window_kwargs())
+            for line in self.current_process.stdout:
+                if self.stop_flag.is_set():
+                    self.current_process.terminate()
+                    break
+                self.post("log", text=line)
+            self.current_process.wait()
+            if self.stop_flag.is_set():
+                self.post("dl_finished", success=False, error="Canceled.")
+                return
+            if self.current_process.returncode != 0:
+                self.post("dl_finished", success=False,
+                          error=f"whisper exited with code {self.current_process.returncode}.")
+                return
+            downloaded, _ = is_model_downloaded(self.model_name)
+            if downloaded:
+                self.post("dl_model_ok")
+                self.post("dl_finished", success=True)
+            else:
+                self.post("dl_finished", success=False,
+                          error="Command finished but the model was not found in cache.")
+        except Exception as e:
+            self.post("dl_finished", success=False, error=str(e))
+        finally:
+            if tmp_dir and os.path.exists(tmp_dir):
+                try:
+                    shutil.rmtree(tmp_dir)
+                except OSError:
+                    pass
+
+    def cancel(self):
+        self.stop_flag.set()
+        if self.current_process and self.current_process.poll() is None:
+            try:
+                self.current_process.terminate()
+            except OSError:
+                pass
+
+
+class CommandStreamWorker(threading.Thread):
+    """Generic: run a command, stream stdout to a queue, post a finish event."""
+
+    def __init__(self, cmd, event_queue, stop_flag, tag="cmd", env=None):
+        super().__init__(daemon=True)
+        self.cmd = cmd
+        self.event_queue = event_queue
+        self.stop_flag = stop_flag
+        self.tag = tag
+        self.env = env
+        self.current_process = None
+
+    def post(self, kind, **kwargs):
+        self.event_queue.put({"kind": kind, "tag": self.tag, **kwargs})
+
+    def run(self):
+        try:
+            self.current_process = subprocess.Popen(
+                self.cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", bufsize=1,
+                env=self.env or subprocess_child_env(),
+                **subprocess_hidden_window_kwargs())
+            for line in self.current_process.stdout:
+                if self.stop_flag.is_set():
+                    self.current_process.terminate()
+                    break
+                self.post("cmd_log", text=line)
+            self.current_process.wait()
+            self.post("cmd_finished", returncode=self.current_process.returncode)
+        except Exception as e:
+            self.post("cmd_log", text=f"\n[ERROR] {e}\n")
+            self.post("cmd_finished", returncode=-1)
+
+    def cancel(self):
+        self.stop_flag.set()
+        if self.current_process and self.current_process.poll() is None:
+            try:
+                self.current_process.terminate()
+            except OSError:
+                pass
+
+
+class TranscriptionWorker(threading.Thread):
+    def __init__(self, items, whisper_exe, ffmpeg_path, lang_param, task,
+                 model_name, initial_prompt, replacements, keep_formats,
+                 output_dir_mode, fixed_output_dir, clip_range, strings,
+                 event_queue, stop_flag):
+        super().__init__(daemon=True)
+        self.items = items
+        self.whisper_exe = whisper_exe
+        self.ffmpeg_path = ffmpeg_path
+        self.lang_param = lang_param
+        self.task = task
+        self.model_name = model_name
+        self.initial_prompt = initial_prompt
+        self.replacements = replacements
+        self.keep_formats = keep_formats
+        self.output_dir_mode = output_dir_mode
+        self.fixed_output_dir = fixed_output_dir
+        self.clip_range = clip_range
+        self.s = strings
+        self.event_queue = event_queue
+        self.stop_flag = stop_flag
+        self.current_process = None
+
+    def post(self, kind, **kwargs):
+        self.event_queue.put({"kind": kind, **kwargs})
+
+    def run(self):
+        total = len(self.items)
+        for idx, item in enumerate(self.items):
+            if self.stop_flag.is_set():
+                item.status = ST_SKIPPED
+                self.post("item_status", index=idx, status=ST_SKIPPED)
+                continue
+            self.post("item_status", index=idx, status=ST_RUNNING)
+            sep = "=" * 70
+            self.post("log", text=self.s["log_file_start"].format(
+                sep=sep, i=idx + 1, n=total, name=item.filename))
+            self.post("log", text=self.s["log_probing"])
+            full_duration = ffmpeg_probe_duration(self.ffmpeg_path, item.filepath)
+            if full_duration:
+                self.post("log", text=self.s["log_duration_ok"].format(dur=fmt_hms(full_duration)))
+            else:
+                self.post("log", text=self.s["log_duration_fail"])
+            offset_seconds = 0.0
+            effective_duration = full_duration
+            if self.clip_range:
+                start_s, end_s = self.clip_range
+                if full_duration:
+                    end_s = min(end_s, full_duration)
+                offset_seconds = start_s
+                effective_duration = max(0.0, end_s - start_s)
+            self.post("duration", index=idx, seconds=effective_duration)
+            try:
+                self._transcribe_one(item, idx, offset_seconds)
+                if self.stop_flag.is_set():
+                    item.status = ST_SKIPPED
+                    self.post("item_status", index=idx, status=ST_SKIPPED)
+                else:
+                    item.status = ST_DONE
+                    self.post("item_status", index=idx, status=ST_DONE)
+                    self.post("log", text=self.s["log_file_done"].format(name=item.filename))
+            except Exception as e:
+                item.status = ST_ERROR
+                item.error_message = str(e)
+                self.post("item_status", index=idx, status=ST_ERROR, error=str(e))
+                self.post("log", text=self.s["log_file_error"].format(name=item.filename, e=e))
+        self.post("batch_finished")
+
+    def _resolve_output_dir(self, item):
+        if self.output_dir_mode == "fixed" and self.fixed_output_dir:
+            return self.fixed_output_dir
+        return os.path.dirname(item.filepath)
+
+    def _prepare_clip_if_needed(self, item, idx, tmp_dir):
+        if not self.clip_range:
+            return item.filepath
+        if not (self.ffmpeg_path and os.path.exists(self.ffmpeg_path)):
+            raise RuntimeError("Time-range clipping requested, but ffmpeg was not found.")
+        start_s, end_s = self.clip_range
+        ext = os.path.splitext(item.filepath)[1] or ".mkv"
+        clip_path = os.path.join(tmp_dir, f"clip_{idx}{ext}")
+        cmd = build_ffmpeg_clip_command(self.ffmpeg_path, item.filepath, clip_path, start_s, end_s)
+        self.post("log", text=self.s["log_cmd"].format(cmd=" ".join(cmd)))
+        proc = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            encoding="utf-8", errors="replace", env=subprocess_child_env(),
+            **subprocess_hidden_window_kwargs())
+        if proc.returncode != 0 or not os.path.exists(clip_path):
+            raise RuntimeError(f"ffmpeg clip failed (code {proc.returncode}).\n{proc.stdout}")
+        return clip_path
+
+    def _transcribe_one(self, item, idx, offset_seconds):
+        out_dir = self._resolve_output_dir(item)
+        os.makedirs(out_dir, exist_ok=True)
+        item.output_dir = out_dir
+        base = os.path.splitext(os.path.basename(item.filepath))[0]
+        partial = PartialTranscriptWriter(os.path.join(out_dir, base + ".partial.txt"))
+        partial.open()
+        import tempfile
+        tmp_dir = tempfile.mkdtemp(prefix="whisper_clip_")
+        try:
+            input_path = self._prepare_clip_if_needed(item, idx, tmp_dir)
+            cmd = [self.whisper_exe, input_path, "--model", self.model_name,
+                   "--task", self.task, "--fp16", "False",
+                   "--output_dir", out_dir, "--output_format", "all",
+                   "--verbose", "True"]
+            if self.lang_param:
+                cmd.extend(["--language", self.lang_param])
+            if self.initial_prompt:
+                cmd.extend(["--initial_prompt", self.initial_prompt])
+            self.post("log", text=self.s["log_cmd"].format(cmd=" ".join(cmd)))
+            self.post("phase", index=idx, phase="preparing")
+            self.current_process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                encoding="utf-8", errors="replace", bufsize=1,
+                env=subprocess_child_env(), **subprocess_hidden_window_kwargs())
+            saw_first_segment = False
+            for line in self.current_process.stdout:
+                if self.stop_flag.is_set():
+                    self.current_process.terminate()
+                    break
+                self.post("log", text=line)
+                seg = parse_whisper_segment_line(line)
+                if seg is not None:
+                    if not saw_first_segment:
+                        saw_first_segment = True
+                        self.post("phase", index=idx, phase="transcribing")
+                    seg_start, seg_end, seg_text = seg
+                    partial.write_segment(seg_text.strip())
+                    self.post("progress_tick", index=idx, seconds=seg_start)
+            self.current_process.wait()
+            if not self.stop_flag.is_set() and self.current_process.returncode != 0:
+                raise RuntimeError(
+                    f"whisper exited with code {self.current_process.returncode}.")
+            if self.stop_flag.is_set():
+                return
+
+            def fpath(ext):
+                return os.path.join(out_dir, base + "." + ext)
+
+            # Clip outputs were named after the temp clip file; rename to base.
+            if self.clip_range:
+                clip_base = os.path.splitext(os.path.basename(input_path))[0]
+                if clip_base != base:
+                    for ext in WHISPER_FORMATS:
+                        src = os.path.join(out_dir, clip_base + "." + ext)
+                        if os.path.exists(src):
+                            dst = fpath(ext)
+                            try:
+                                if os.path.exists(dst):
+                                    os.remove(dst)
+                                os.replace(src, dst)
+                            except OSError:
+                                pass
+
+            # Shift timestamps back to the original timeline (clip case).
+            if self.clip_range and offset_seconds:
+                for ext in WHISPER_FORMATS:
+                    shift_output_timestamps(fpath(ext), ext, offset_seconds)
+
+            # Apply dictionary replacements to whisper text formats first, so
+            # the MD (derived from SRT) inherits the corrections.
+            if self.replacements:
+                for ext in ("txt", "srt", "vtt", "tsv"):
+                    self._apply_replacements(fpath(ext))
+
+            # Build clean MD from the subtitle (prefer SRT, then VTT, then TXT).
+            if "md" in self.keep_formats:
+                self.post("log", text=self.s["log_md_make"])
+                made = False
+                for ext in ("srt", "vtt"):
+                    p = fpath(ext)
+                    if os.path.exists(p):
+                        convert_subtitle_file_to_md(p, fpath("md"), title=base)
+                        made = True
+                        break
+                if not made and os.path.exists(fpath("txt")):
+                    with open(fpath("txt"), "r", encoding="utf-8", errors="replace") as f:
+                        txt = f.read()
+                    prose = "\n\n".join(s.strip() for s in re.split(r"\n\s*\n", txt) if s.strip())
+                    with open(fpath("md"), "w", encoding="utf-8") as f:
+                        f.write((f"# {base}\n\n" + prose).strip() + "\n")
+                if self.replacements:
+                    self._apply_replacements(fpath("md"))
+
+            # Remove whisper formats the user did not keep.
+            for ext in WHISPER_FORMATS:
+                if ext not in self.keep_formats:
+                    p = fpath(ext)
+                    if os.path.exists(p):
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
+
+            item.output_txt = fpath("txt") if os.path.exists(fpath("txt")) else None
+            item.output_srt = fpath("srt") if os.path.exists(fpath("srt")) else None
+            item.output_md = fpath("md") if os.path.exists(fpath("md")) else None
+            partial.discard()
+        finally:
+            partial.close()
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except OSError:
+                pass
+
+    def _apply_replacements(self, path):
+        if not path or not os.path.exists(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+            for find, replace in self.replacements:
+                if not find:
+                    continue
+                content = content.replace(find, replace)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+        except OSError as e:
+            self.post("log", text=self.s["log_dict_warn"].format(path=path, e=e))
+
+    def cancel(self):
+        self.stop_flag.set()
+        if self.current_process and self.current_process.poll() is None:
+            try:
+                self.current_process.terminate()
+            except OSError:
+                pass
+
+
+class ConversionWorker(threading.Thread):
+    """MD File Generation tab: convert docs/subtitles to clean Markdown."""
+
+    def __init__(self, items, python_exe, markitdown_ok, output_dir_mode,
+                 fixed_output_dir, strings, event_queue, stop_flag):
+        super().__init__(daemon=True)
+        self.items = items
+        self.python_exe = python_exe
+        self.markitdown_ok = markitdown_ok
+        self.output_dir_mode = output_dir_mode
+        self.fixed_output_dir = fixed_output_dir
+        self.s = strings
+        self.event_queue = event_queue
+        self.stop_flag = stop_flag
+        self.current_process = None
+
+    def post(self, kind, **kwargs):
+        self.event_queue.put({"kind": kind, **kwargs})
+
+    def _resolve_output_dir(self, item):
+        if self.output_dir_mode == "fixed" and self.fixed_output_dir:
+            return self.fixed_output_dir
+        return os.path.dirname(item.filepath)
+
+    def run(self):
+        total = len(self.items)
+        for idx, item in enumerate(self.items):
+            if self.stop_flag.is_set():
+                item.status = ST_SKIPPED
+                self.post("md_item_status", index=idx, status=ST_SKIPPED)
+                continue
+            self.post("md_item_status", index=idx, status=ST_RUNNING)
+            sep = "=" * 70
+            self.post("md_log", text=self.s["log_file_start"].format(
+                sep=sep, i=idx + 1, n=total, name=item.filename))
+            try:
+                self._convert_one(item)
+                if self.stop_flag.is_set():
+                    item.status = ST_SKIPPED
+                    self.post("md_item_status", index=idx, status=ST_SKIPPED)
+                else:
+                    item.status = ST_DONE
+                    self.post("md_item_status", index=idx, status=ST_DONE)
+                    self.post("md_log", text=self.s["log_file_done"].format(name=item.filename))
+            except Exception as e:
+                item.status = ST_ERROR
+                item.error_message = str(e)
+                self.post("md_item_status", index=idx, status=ST_ERROR, error=str(e))
+                self.post("md_log", text=self.s["log_file_error"].format(name=item.filename, e=e))
+        self.post("md_batch_finished")
+
+    def _convert_one(self, item):
+        out_dir = self._resolve_output_dir(item)
+        os.makedirs(out_dir, exist_ok=True)
+        item.output_dir = out_dir
+        base = os.path.splitext(os.path.basename(item.filepath))[0]
+        dst = os.path.join(out_dir, base + ".md")
+        ext = os.path.splitext(item.filepath)[1].lower()
+        if ext in SUBTITLE_EXTENSIONS:
+            self.post("md_log", text=self.s["log_md_make"])
+            convert_subtitle_file_to_md(item.filepath, dst, title=base)
+            item.output_md = dst
+            return
+        if not self.markitdown_ok:
+            raise RuntimeError("MarkItDown is required to convert this file type.")
+        cmd = build_markitdown_command(self.python_exe, item.filepath, dst)
+        self.post("md_log", text=self.s["log_md_markitdown"].format(name=item.filename))
+        self.post("md_log", text="Command: " + " ".join(cmd) + "\n")
+        self.current_process = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            encoding="utf-8", errors="replace", bufsize=1,
+            env=subprocess_child_env(), **subprocess_hidden_window_kwargs())
+        for line in self.current_process.stdout:
+            if self.stop_flag.is_set():
+                self.current_process.terminate()
+                break
+            self.post("md_log", text=line)
+        self.current_process.wait()
+        if not self.stop_flag.is_set() and self.current_process.returncode != 0:
+            raise RuntimeError(f"markitdown exited with code {self.current_process.returncode}.")
+        item.output_md = dst if os.path.exists(dst) else None
+
+    def cancel(self):
+        self.stop_flag.set()
+        if self.current_process and self.current_process.poll() is None:
+            try:
+                self.current_process.terminate()
+            except OSError:
+                pass
+
+
+# ==========================================================================
+# ffmpeg archive extraction (testable helper)
+# ==========================================================================
+
+def extract_ffmpeg_archive(archive_path, dest_dir):
+    """Extract a downloaded ffmpeg archive and return the path to the ffmpeg
+    executable copied into dest_dir, or None if not found."""
+    archive_path = str(archive_path)
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    extract_root = dest_dir / "_extract"
+    if extract_root.exists():
+        shutil.rmtree(extract_root, ignore_errors=True)
+    extract_root.mkdir(parents=True, exist_ok=True)
+
+    if archive_path.lower().endswith(".zip"):
+        with zipfile.ZipFile(archive_path) as zf:
+            zf.extractall(extract_root)
+    elif archive_path.lower().endswith((".tar.xz", ".tar.gz", ".tgz", ".txz")):
+        with tarfile.open(archive_path) as tf:
+            tf.extractall(extract_root)
+    else:
+        return None
+
+    candidates = []
+    for root, _dirs, files in os.walk(extract_root):
+        for name in files:
+            low = name.lower()
+            if low == "ffmpeg.exe" or low == "ffmpeg":
+                candidates.append(os.path.join(root, name))
+    if not candidates:
+        return None
+    src = candidates[0]
+    final_name = "ffmpeg.exe" if src.lower().endswith(".exe") else "ffmpeg"
+    final_path = dest_dir / final_name
+    shutil.copy2(src, final_path)
+    if not final_name.endswith(".exe"):
+        try:
+            os.chmod(final_path, 0o755)
+        except OSError:
+            pass
+    shutil.rmtree(extract_root, ignore_errors=True)
+    return str(final_path)
+
+
+# ==========================================================================
+# Scrollable frame (fixes the "text hidden when window shrinks" bug)
+# ==========================================================================
+
+class ScrollableFrame(ttk.Frame):
+    def __init__(self, parent, **kwargs):
+        super().__init__(parent, **kwargs)
+        self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0)
+        self.vscroll = ttk.Scrollbar(self, orient="vertical",
+                                     command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.vscroll.set)
+        self.vscroll.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.inner = ttk.Frame(self.canvas)
+        self._win = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+        self.inner.bind("<Configure>", self._on_inner_configure)
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+        self.canvas.bind("<Enter>", self._bind_wheel)
+        self.canvas.bind("<Leave>", self._unbind_wheel)
+
+    def _on_inner_configure(self, _event):
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _on_canvas_configure(self, event):
+        self.canvas.itemconfig(self._win, width=event.width)
+
+    def _bind_wheel(self, _event):
+        self.canvas.bind_all("<MouseWheel>", self._on_wheel)
+        self.canvas.bind_all("<Button-4>", self._on_wheel)
+        self.canvas.bind_all("<Button-5>", self._on_wheel)
+
+    def _unbind_wheel(self, _event):
+        self.canvas.unbind_all("<MouseWheel>")
+        self.canvas.unbind_all("<Button-4>")
+        self.canvas.unbind_all("<Button-5>")
+
+    def _on_wheel(self, event):
+        if event.num == 4:
+            self.canvas.yview_scroll(-1, "units")
+        elif event.num == 5:
+            self.canvas.yview_scroll(1, "units")
+        else:
+            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+
+# ==========================================================================
+# Main application
+# ==========================================================================
+
+DEFAULT_CONFIG = {
+    "ui_language": "en",
+    "whisper_path": "",
+    "ffmpeg_path": "",
+    "markitdown_python": "",
+    "audio_lang_code": "pt",
+    "audio_langs": list(DEFAULT_AUDIO_LANGS),
+    "model_cli": "turbo",
+    "task": "transcribe",
+    "output_formats": {f: True for f in OUTPUT_FORMATS},
+    "output_dir_mode": "same",
+    "fixed_output_dir": "",
+    "selected_dictionary": "",
+}
+
+_OLD_AUDIO_LANG_MAP = {"portuguese": "pt", "english": "en",
+                       "spanish": "es", "auto": "auto"}
+
+
+class TranscriptLabApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        ensure_config_dir()
+        self.cfg = self._load_config()
+        self.lang = self.cfg.get("ui_language", "en")
+        if self.lang not in TRANSLATIONS:
+            self.lang = "en"
+        self.s = TRANSLATIONS[self.lang]
+
+        self.dictionaries = load_json(DICTIONARIES_FILE, {})
+
+        # runtime state
+        self.queue_items = []
+        self.md_queue_items = []
+        self.worker = None
+        self.stop_flag = None
+        self.event_queue = queue.Queue()
+        self.is_running = False
+        self.md_worker = None
+        self.md_stop_flag = None
+        self.md_event_queue = queue.Queue()
+        self.md_is_running = False
+        self._wrap_labels = []
+        self._batch_start_time = None
+        self._batch_done = 0
+        self._batch_errors = 0
+        self._cur_duration = None
+        self._cur_phase = None
+        self._md_batch_start_time = None
+        self._md_done = 0
+        self._md_errors = 0
+
+        # dependency detection
+        self._detect_dependencies()
+
+        self.title(self.s["window_title"])
+        self.geometry("1024x780")
+        self.minsize(720, 560)
+        self._set_icon()
+
+        self._build_menubar()
+        self._build_ui()
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.after(120, self._poll_events)
+        self.after(120, self._poll_md_events)
+
+    # ---- helpers ---------------------------------------------------------
+    def t(self, key, **kw):
+        text = self.s.get(key, key)
+        if kw:
+            try:
+                return text.format(**kw)
+            except (KeyError, IndexError, ValueError):
+                return text
+        return text
+
+    def _load_config(self):
+        data = load_json(CONFIG_FILE, {})
+        cfg = dict(DEFAULT_CONFIG)
+        cfg["output_formats"] = dict(DEFAULT_CONFIG["output_formats"])
+        cfg["audio_langs"] = list(DEFAULT_AUDIO_LANGS)
+        if isinstance(data, dict):
+            # migrate old audio_lang_key
+            if "audio_lang_code" not in data and "audio_lang_key" in data:
+                data["audio_lang_code"] = _OLD_AUDIO_LANG_MAP.get(
+                    data.get("audio_lang_key"), "pt")
+            for k, v in data.items():
+                if k == "output_formats" and isinstance(v, dict):
+                    merged = dict(DEFAULT_CONFIG["output_formats"])
+                    merged.update({fk: bool(fv) for fk, fv in v.items()
+                                   if fk in OUTPUT_FORMATS})
+                    cfg["output_formats"] = merged
+                elif k in DEFAULT_CONFIG:
+                    cfg[k] = v
+        # sanity
+        if cfg.get("audio_lang_code") not in (
+                list(AUDIO_LANG_OPTIONS) + list(WHISPER_LANGUAGES)):
+            cfg["audio_lang_code"] = "pt"
+        langs = cfg.get("audio_langs") or list(DEFAULT_AUDIO_LANGS)
+        cfg["audio_langs"] = [c for c in langs
+                              if c in AUDIO_LANG_OPTIONS or c in WHISPER_LANGUAGES]
+        if not cfg["audio_langs"]:
+            cfg["audio_langs"] = list(DEFAULT_AUDIO_LANGS)
+        if cfg["audio_lang_code"] not in cfg["audio_langs"]:
+            cfg["audio_langs"].insert(0, cfg["audio_lang_code"])
+        return cfg
+
+    def _save_config(self):
+        save_json(CONFIG_FILE, self.cfg)
+
+    def _detect_dependencies(self):
+        self.whisper_path = find_whisper_path(self.cfg.get("whisper_path") or None)
+        self.ffmpeg_path = find_ffmpeg(self.cfg.get("ffmpeg_path") or None)
+        self.python_exe = markitdown_python(self.cfg)
+        self.markitdown_ok = markitdown_is_available(self.python_exe)
+
+    def _set_icon(self):
+        try:
+            import base64
+            self._icon_img = tk.PhotoImage(data=base64.b64decode(APP_ICON_BASE64))
+            self.iconphoto(True, self._icon_img)
+        except Exception:
+            pass
+
+    # ---- audio language display/param -----------------------------------
+    def _audio_lang_display(self, code):
+        if code == "auto":
+            return self.t("audlang_auto")
+        if code == "pt":
+            return self.t("audlang_portuguese")
+        if code == "en":
+            return self.t("audlang_english")
+        if code == "es":
+            return self.t("audlang_spanish")
+        name = WHISPER_LANGUAGES.get(code, code)
+        return f"{name} ({code})"
+
+    def _model_display(self, cli):
+        info = MODEL_INFO[cli]
+        return f"{cli}  —  {self.t(info['desc_key'])}"
+
+    # ======================================================================
+    # Menubar
+    # ======================================================================
+    def _build_menubar(self):
+        menubar = tk.Menu(self)
+        settings_menu = tk.Menu(menubar, tearoff=0)
+        settings_menu.add_command(label=self.t("menu_whisper"),
+                                  command=self._open_whisper_settings)
+        settings_menu.add_command(label=self.t("menu_markitdown"),
+                                  command=self._open_markitdown_settings)
+        settings_menu.add_command(label=self.t("menu_ffmpeg"),
+                                  command=self._open_ffmpeg_settings)
+        settings_menu.add_command(label=self.t("menu_output_formats"),
+                                  command=self._open_output_formats)
+        settings_menu.add_separator()
+        lang_menu = tk.Menu(settings_menu, tearoff=0)
+        self._menu_lang_var = tk.StringVar(value=self.lang)
+        lang_menu.add_radiobutton(label=self.t("lang_english"), value="en",
+                                  variable=self._menu_lang_var,
+                                  command=lambda: self._switch_language("en"))
+        lang_menu.add_radiobutton(label=self.t("lang_portuguese"), value="pt",
+                                  variable=self._menu_lang_var,
+                                  command=lambda: self._switch_language("pt"))
+        settings_menu.add_cascade(label=self.t("menu_interface_language"),
+                                  menu=lang_menu)
+        menubar.add_cascade(label=self.t("menu_settings"), menu=settings_menu)
+        menubar.add_command(label=self.t("menu_about"), command=self._open_about)
+        self.config(menu=menubar)
+
+    # ======================================================================
+    # UI build
+    # ======================================================================
+    def _build_ui(self):
+        if hasattr(self, "notebook") and self.notebook.winfo_exists():
+            self.notebook.destroy()
+        self._wrap_labels = []
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill="both", expand=True, padx=8, pady=8)
+
+        self.tab_main = ttk.Frame(self.notebook)
+        self.tab_md = ttk.Frame(self.notebook)
+        self.tab_dict = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_main, text=self.t("tab_transcription"))
+        self.notebook.add(self.tab_md, text=self.t("tab_md"))
+        self.notebook.add(self.tab_dict, text=self.t("tab_dictionary"))
+
+        self._build_transcription_tab(self.tab_main)
+        self._build_md_tab(self.tab_md)
+        self._build_dictionary_tab(self.tab_dict)
+        self._refresh_status_indicators()
+        self._refresh_audio_lang_dropdown()
+        self._refresh_model_dropdown()
+        self._refresh_dictionary_dropdown()
+        self._update_clip_gate()
+
+    def _register_wrap(self, label):
+        self._wrap_labels.append(label)
+
+    # ---- transcription tab ----------------------------------------------
+    def _build_transcription_tab(self, parent):
+        scroll = ScrollableFrame(parent)
+        scroll.pack(fill="both", expand=True)
+        root = scroll.inner
+        root.columnconfigure(0, weight=1)
+        scroll.canvas.bind("<Configure>", self._on_main_canvas_configure, add="+")
+        self._main_canvas = scroll.canvas
+        r = 0
+
+        # --- status indicators (row 1) ---
+        status = ttk.LabelFrame(root, text="")
+        status.grid(row=r, column=0, sticky="ew", padx=6, pady=(6, 2))
+        status.columnconfigure(3, weight=1)
+        self.ind_whisper = tk.Label(status, text="", cursor="hand2",
+                                    font=("TkDefaultFont", 10, "bold"))
+        self.ind_whisper.grid(row=0, column=0, padx=8, pady=6)
+        self.ind_whisper.bind("<Button-1>", lambda e: self._open_whisper_settings())
+        self.ind_markitdown = tk.Label(status, text="", cursor="hand2",
+                                       font=("TkDefaultFont", 10, "bold"))
+        self.ind_markitdown.grid(row=0, column=1, padx=8, pady=6)
+        self.ind_markitdown.bind("<Button-1>", lambda e: self._open_markitdown_settings())
+        self.ind_ffmpeg = tk.Label(status, text="", cursor="hand2",
+                                   font=("TkDefaultFont", 10, "bold"))
+        self.ind_ffmpeg.grid(row=0, column=2, padx=8, pady=6)
+        self.ind_ffmpeg.bind("<Button-1>", lambda e: self._open_ffmpeg_settings())
+        self.ind_hint = ttk.Label(status, text=self.t("dep_hint"), foreground="#777")
+        self.ind_hint.grid(row=0, column=3, sticky="e", padx=8)
+        r += 1
+
+        # --- audio language + model row ---
+        cfgf = ttk.Frame(root)
+        cfgf.grid(row=r, column=0, sticky="ew", padx=6, pady=2)
+        cfgf.columnconfigure(1, weight=1)
+        cfgf.columnconfigure(4, weight=1)
+        ttk.Label(cfgf, text=self.t("audio_language")).grid(row=0, column=0, sticky="w", padx=(0, 4), pady=4)
+        self.audio_lang_var = tk.StringVar()
+        self.audio_lang_combo = ttk.Combobox(cfgf, textvariable=self.audio_lang_var,
+                                              state="readonly", width=22)
+        self.audio_lang_combo.grid(row=0, column=1, sticky="ew", pady=4)
+        self.audio_lang_combo.bind("<<ComboboxSelected>>", self._on_audio_lang_change)
+        ttk.Button(cfgf, text=self.t("add_languages"),
+                   command=lambda: self._open_whisper_settings(focus="langs")
+                   ).grid(row=0, column=2, sticky="w", padx=(6, 16), pady=4)
+
+        ttk.Label(cfgf, text=self.t("ai_model")).grid(row=0, column=3, sticky="w", padx=(0, 4), pady=4)
+        self.model_var = tk.StringVar()
+        self.model_combo = ttk.Combobox(cfgf, textvariable=self.model_var,
+                                        state="readonly", width=34)
+        self.model_combo.grid(row=0, column=4, sticky="ew", pady=4)
+        self.model_combo.bind("<<ComboboxSelected>>", self._on_model_change)
+        ttk.Button(cfgf, text=self.t("add_model"),
+                   command=lambda: self._open_whisper_settings(focus="models")
+                   ).grid(row=0, column=5, sticky="w", padx=(6, 0), pady=4)
+
+        # task row
+        ttk.Label(cfgf, text=self.t("task")).grid(row=1, column=0, sticky="w", padx=(0, 4), pady=4)
+        self.task_var = tk.StringVar()
+        self.task_combo = ttk.Combobox(cfgf, textvariable=self.task_var,
+                                       state="readonly", width=22)
+        self.task_combo["values"] = [self.t("task_transcribe"), self.t("task_translate")]
+        self.task_combo.current(0 if self.cfg.get("task", "transcribe") == "transcribe" else 1)
+        self.task_combo.grid(row=1, column=1, sticky="ew", pady=4)
+        self.task_combo.bind("<<ComboboxSelected>>", self._on_task_change)
+        r += 1
+
+        # model status label
+        self.model_status_var = tk.StringVar(value="")
+        msl = ttk.Label(root, textvariable=self.model_status_var, foreground="#555")
+        msl.grid(row=r, column=0, sticky="w", padx=10, pady=(0, 4))
+        self._register_wrap(msl)
+        r += 1
+
+        # vocabulary dictionary
+        dictf = ttk.Frame(root)
+        dictf.grid(row=r, column=0, sticky="ew", padx=6, pady=2)
+        dictf.columnconfigure(1, weight=1)
+        ttk.Label(dictf, text=self.t("vocab_dict")).grid(row=0, column=0, sticky="w", padx=(0, 4))
+        self.dict_var = tk.StringVar()
+        self.dict_combo = ttk.Combobox(dictf, textvariable=self.dict_var,
+                                       state="readonly", width=34)
+        self.dict_combo.grid(row=0, column=1, sticky="ew")
+        r += 1
+
+        # clip frame
+        self.clip_frame = ttk.LabelFrame(root, text=self.t("clip_frame"))
+        self.clip_frame.grid(row=r, column=0, sticky="ew", padx=6, pady=4)
+        self.clip_frame.columnconfigure(5, weight=1)
+        self.clip_enabled_var = tk.BooleanVar(value=False)
+        self.clip_check = ttk.Checkbutton(self.clip_frame, text=self.t("clip_enable"),
+                                          variable=self.clip_enabled_var,
+                                          command=self._update_clip_gate)
+        self.clip_check.grid(row=0, column=0, columnspan=6, sticky="w", padx=6, pady=(4, 0))
+        ttk.Label(self.clip_frame, text=self.t("clip_start")).grid(row=1, column=0, sticky="w", padx=(6, 2), pady=4)
+        self.clip_start_var = tk.StringVar(value="0:00:00")
+        self.clip_start_entry = ttk.Entry(self.clip_frame, textvariable=self.clip_start_var, width=12)
+        self.clip_start_entry.grid(row=1, column=1, sticky="w", pady=4)
+        ttk.Label(self.clip_frame, text=self.t("clip_end")).grid(row=1, column=2, sticky="w", padx=(12, 2), pady=4)
+        self.clip_end_var = tk.StringVar(value="0:05:00")
+        self.clip_end_entry = ttk.Entry(self.clip_frame, textvariable=self.clip_end_var, width=12)
+        self.clip_end_entry.grid(row=1, column=3, sticky="w", pady=4)
+        self.clip_hint_label = ttk.Label(self.clip_frame, text=self.t("clip_hint"), foreground="#777")
+        self.clip_hint_label.grid(row=2, column=0, columnspan=6, sticky="w", padx=6, pady=(0, 4))
+        self._register_wrap(self.clip_hint_label)
+        r += 1
+
+        # output folder
+        outf = ttk.LabelFrame(root, text=self.t("output_folder"))
+        outf.grid(row=r, column=0, sticky="ew", padx=6, pady=4)
+        outf.columnconfigure(1, weight=1)
+        self.outdir_mode_var = tk.StringVar(value=self.cfg.get("output_dir_mode", "same"))
+        ttk.Radiobutton(outf, text=self.t("same_folder"), variable=self.outdir_mode_var,
+                        value="same", command=self._on_outdir_mode_change
+                        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=6, pady=(4, 0))
+        ttk.Radiobutton(outf, text=self.t("fixed_folder"), variable=self.outdir_mode_var,
+                        value="fixed", command=self._on_outdir_mode_change
+                        ).grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        self.fixed_dir_var = tk.StringVar(value=self.cfg.get("fixed_output_dir", ""))
+        self.fixed_dir_entry = ttk.Entry(outf, textvariable=self.fixed_dir_var)
+        self.fixed_dir_entry.grid(row=1, column=1, sticky="ew", pady=4)
+        ttk.Button(outf, text=self.t("browse"),
+                   command=self._browse_fixed_dir).grid(row=1, column=2, padx=6, pady=4)
+        r += 1
+
+        # queue
+        qf = ttk.LabelFrame(root, text=self.t("queue_frame"))
+        qf.grid(row=r, column=0, sticky="ew", padx=6, pady=4)
+        qf.columnconfigure(0, weight=1)
+        btns = ttk.Frame(qf)
+        btns.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
+        ttk.Button(btns, text=self.t("add_files"), command=self._add_files).pack(side="left", padx=2)
+        ttk.Button(btns, text=self.t("remove_selected"), command=self._remove_selected).pack(side="left", padx=2)
+        ttk.Button(btns, text=self.t("clear_queue"), command=self._clear_queue).pack(side="left", padx=2)
+        ttk.Button(btns, text=self.t("move_up"), command=lambda: self._move_selected(-1)).pack(side="left", padx=2)
+        ttk.Button(btns, text=self.t("move_down"), command=lambda: self._move_selected(1)).pack(side="left", padx=2)
+        cols = ("order", "file", "folder", "status")
+        self.tree = ttk.Treeview(qf, columns=cols, show="headings", height=6)
+        self.tree.heading("order", text=self.t("col_order"))
+        self.tree.heading("file", text=self.t("col_file"))
+        self.tree.heading("folder", text=self.t("col_folder"))
+        self.tree.heading("status", text=self.t("col_status"))
+        self.tree.column("order", width=40, anchor="center", stretch=False)
+        self.tree.column("file", width=320)
+        self.tree.column("folder", width=260)
+        self.tree.column("status", width=120, anchor="center")
+        self.tree.grid(row=1, column=0, sticky="ew", padx=4, pady=4)
+        r += 1
+
+        # run controls
+        runf = ttk.Frame(root)
+        runf.grid(row=r, column=0, sticky="ew", padx=6, pady=4)
+        runf.columnconfigure(2, weight=1)
+        self.start_btn = ttk.Button(runf, text=self.t("start_batch"), command=self._start_batch)
+        self.start_btn.grid(row=0, column=0, padx=2)
+        self.cancel_btn = ttk.Button(runf, text=self.t("cancel"), command=self._cancel_batch, state="disabled")
+        self.cancel_btn.grid(row=0, column=1, padx=2)
+        self.open_out_btn = ttk.Button(runf, text=self.t("open_output_folder"),
+                                       command=self._open_output_folder, state="disabled")
+        self.open_out_btn.grid(row=0, column=3, padx=2, sticky="e")
+        self.progress = ttk.Progressbar(runf, mode="determinate", maximum=100)
+        self.progress.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        self.progress_label_var = tk.StringVar(value=self.t("waiting_start"))
+        pll = ttk.Label(runf, textvariable=self.progress_label_var, foreground="#555")
+        pll.grid(row=2, column=0, columnspan=4, sticky="w", pady=(2, 0))
+        self._register_wrap(pll)
+        r += 1
+
+        # log
+        logf = ttk.LabelFrame(root, text=self.t("log_frame"))
+        logf.grid(row=r, column=0, sticky="nsew", padx=6, pady=4)
+        logf.columnconfigure(0, weight=1)
+        self.log_text = tk.Text(logf, height=12, wrap="word", state="disabled",
+                                font=("TkFixedFont", 9))
+        logsb = ttk.Scrollbar(logf, orient="vertical", command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=logsb.set)
+        self.log_text.grid(row=0, column=0, sticky="nsew", padx=(4, 0), pady=4)
+        logsb.grid(row=0, column=1, sticky="ns", pady=4)
+        self.log_frame_label = logf
+        note = ttk.Label(logf, text=self.t("partial_output_note"), foreground="#777")
+        note.grid(row=1, column=0, columnspan=2, sticky="w", padx=4, pady=(0, 4))
+        self._register_wrap(note)
+
+    def _on_main_canvas_configure(self, event):
+        width = max(200, event.width - 40)
+        for lbl in self._wrap_labels:
+            try:
+                lbl.configure(wraplength=width)
+            except tk.TclError:
+                pass
+
+    # ---- MD File Generation tab -----------------------------------------
+    def _build_md_tab(self, parent):
+        root = ttk.Frame(parent)
+        root.pack(fill="both", expand=True)
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(4, weight=1)
+
+        intro = ttk.Label(root, text=self.t("md_intro"), foreground="#555")
+        intro.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 2))
+        intro.configure(wraplength=900)
+        self._md_intro_label = intro
+
+        # output folder
+        outf = ttk.LabelFrame(root, text=self.t("output_folder"))
+        outf.grid(row=1, column=0, sticky="ew", padx=8, pady=4)
+        outf.columnconfigure(1, weight=1)
+        self.md_outdir_mode_var = tk.StringVar(value="same")
+        ttk.Radiobutton(outf, text=self.t("same_folder"), variable=self.md_outdir_mode_var,
+                        value="same").grid(row=0, column=0, columnspan=3, sticky="w", padx=6, pady=(4, 0))
+        ttk.Radiobutton(outf, text=self.t("fixed_folder"), variable=self.md_outdir_mode_var,
+                        value="fixed").grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        self.md_fixed_dir_var = tk.StringVar(value="")
+        ttk.Entry(outf, textvariable=self.md_fixed_dir_var).grid(row=1, column=1, sticky="ew", pady=4)
+        ttk.Button(outf, text=self.t("browse"),
+                   command=self._browse_md_fixed_dir).grid(row=1, column=2, padx=6, pady=4)
+
+        # queue
+        qf = ttk.LabelFrame(root, text=self.t("md_queue_frame"))
+        qf.grid(row=2, column=0, sticky="ew", padx=8, pady=4)
+        qf.columnconfigure(0, weight=1)
+        btns = ttk.Frame(qf)
+        btns.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
+        ttk.Button(btns, text=self.t("add_files"), command=self._md_add_files).pack(side="left", padx=2)
+        ttk.Button(btns, text=self.t("remove_selected"), command=self._md_remove_selected).pack(side="left", padx=2)
+        ttk.Button(btns, text=self.t("clear_queue"), command=self._md_clear_queue).pack(side="left", padx=2)
+        cols = ("order", "file", "folder", "status")
+        self.md_tree = ttk.Treeview(qf, columns=cols, show="headings", height=6)
+        self.md_tree.heading("order", text=self.t("col_order"))
+        self.md_tree.heading("file", text=self.t("col_file"))
+        self.md_tree.heading("folder", text=self.t("col_folder"))
+        self.md_tree.heading("status", text=self.t("col_status"))
+        self.md_tree.column("order", width=40, anchor="center", stretch=False)
+        self.md_tree.column("file", width=320)
+        self.md_tree.column("folder", width=260)
+        self.md_tree.column("status", width=120, anchor="center")
+        self.md_tree.grid(row=1, column=0, sticky="ew", padx=4, pady=4)
+
+        # run controls
+        runf = ttk.Frame(root)
+        runf.grid(row=3, column=0, sticky="ew", padx=8, pady=4)
+        runf.columnconfigure(2, weight=1)
+        self.md_start_btn = ttk.Button(runf, text=self.t("start_batch_md"), command=self._start_md_batch)
+        self.md_start_btn.grid(row=0, column=0, padx=2)
+        self.md_cancel_btn = ttk.Button(runf, text=self.t("cancel"), command=self._cancel_md_batch, state="disabled")
+        self.md_cancel_btn.grid(row=0, column=1, padx=2)
+        self.md_open_out_btn = ttk.Button(runf, text=self.t("open_output_folder"),
+                                          command=self._md_open_output_folder, state="disabled")
+        self.md_open_out_btn.grid(row=0, column=3, padx=2, sticky="e")
+        self.md_progress = ttk.Progressbar(runf, mode="determinate", maximum=100)
+        self.md_progress.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        self.md_progress_label_var = tk.StringVar(value=self.t("waiting_start"))
+        ttk.Label(runf, textvariable=self.md_progress_label_var, foreground="#555"
+                  ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(2, 0))
+
+        # log
+        logf = ttk.LabelFrame(root, text=self.t("log_frame_md"))
+        logf.grid(row=4, column=0, sticky="nsew", padx=8, pady=4)
+        logf.columnconfigure(0, weight=1)
+        logf.rowconfigure(0, weight=1)
+        self.md_log_text = tk.Text(logf, height=10, wrap="word", state="disabled",
+                                   font=("TkFixedFont", 9))
+        logsb = ttk.Scrollbar(logf, orient="vertical", command=self.md_log_text.yview)
+        self.md_log_text.configure(yscrollcommand=logsb.set)
+        self.md_log_text.grid(row=0, column=0, sticky="nsew", padx=(4, 0), pady=4)
+        logsb.grid(row=0, column=1, sticky="ns", pady=4)
+
+    # ---- dictionary tab --------------------------------------------------
+    def _build_dictionary_tab(self, parent):
+        root = ttk.Frame(parent)
+        root.pack(fill="both", expand=True)
+        root.columnconfigure(1, weight=1)
+        root.rowconfigure(0, weight=1)
+
+        left = ttk.LabelFrame(root, text=self.t("saved_profiles"))
+        left.grid(row=0, column=0, sticky="ns", padx=8, pady=8)
+        self.dict_listbox = tk.Listbox(left, width=26, height=18, exportselection=False)
+        self.dict_listbox.pack(fill="both", expand=True, padx=6, pady=6)
+        self.dict_listbox.bind("<<ListboxSelect>>", self._on_dict_profile_select)
+        lb = ttk.Frame(left)
+        lb.pack(fill="x", padx=6, pady=(0, 6))
+        ttk.Button(lb, text=self.t("new"), command=self._dict_new).pack(side="left", padx=2)
+        ttk.Button(lb, text=self.t("duplicate"), command=self._dict_duplicate).pack(side="left", padx=2)
+        ttk.Button(lb, text=self.t("delete"), command=self._dict_delete).pack(side="left", padx=2)
+
+        right = ttk.LabelFrame(root, text=self.t("edit_profile"))
+        right.grid(row=0, column=1, sticky="nsew", padx=8, pady=8)
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(3, weight=1)
+        right.rowconfigure(6, weight=1)
+        ttk.Label(right, text=self.t("profile_name")).grid(row=0, column=0, sticky="w", padx=6, pady=(6, 0))
+        self.dict_name_var = tk.StringVar()
+        ttk.Entry(right, textvariable=self.dict_name_var).grid(row=1, column=0, sticky="ew", padx=6, pady=2)
+        ph = ttk.Label(right, text=self.t("priming_help"), foreground="#666", justify="left")
+        ph.grid(row=2, column=0, sticky="w", padx=6, pady=(8, 0))
+        ph.configure(wraplength=620)
+        self.dict_prompt_text = tk.Text(right, height=4, wrap="word")
+        self.dict_prompt_text.grid(row=3, column=0, sticky="nsew", padx=6, pady=2)
+        rh = ttk.Label(right, text=self.t("replacements_help"), foreground="#666", justify="left")
+        rh.grid(row=5, column=0, sticky="w", padx=6, pady=(8, 0))
+        rh.configure(wraplength=620)
+        self.dict_repl_text = tk.Text(right, height=8, wrap="word")
+        self.dict_repl_text.grid(row=6, column=0, sticky="nsew", padx=6, pady=2)
+        ttk.Button(right, text=self.t("save_profile"), command=self._dict_save
+                   ).grid(row=7, column=0, sticky="e", padx=6, pady=6)
+        self._dict_current = None
+        self._refresh_dict_listbox()
+
+    # ======================================================================
+    # Refresh / state
+    # ======================================================================
+    def _refresh_status_indicators(self):
+        def style(label, name_key, ok):
+            mark = self.t("dep_found") if ok else self.t("dep_missing")
+            label.configure(text=f"{self.t(name_key)} {mark}",
+                            fg=("#1a7f37" if ok else "#cf222e"))
+        style(self.ind_whisper, "dep_whisper", bool(self.whisper_path))
+        style(self.ind_markitdown, "dep_markitdown", bool(self.markitdown_ok))
+        style(self.ind_ffmpeg, "dep_ffmpeg", bool(self.ffmpeg_path))
+
+    def _refresh_audio_lang_dropdown(self):
+        codes = self.cfg.get("audio_langs", list(DEFAULT_AUDIO_LANGS))
+        displays = [self._audio_lang_display(c) for c in codes]
+        self._audio_code_by_display = dict(zip(displays, codes))
+        self.audio_lang_combo["values"] = displays
+        cur = self.cfg.get("audio_lang_code", "pt")
+        if cur not in codes:
+            cur = codes[0] if codes else "pt"
+            self.cfg["audio_lang_code"] = cur
+        self.audio_lang_var.set(self._audio_lang_display(cur))
+
+    def _refresh_model_dropdown(self):
+        code = self.cfg.get("audio_lang_code", "pt")
+        installed = models_for_audio_language(code, only_installed=True)
+        displays = [self._model_display(c) for c in installed]
+        self._model_cli_by_display = dict(zip(displays, installed))
+        self.model_combo["values"] = displays
+        cur = self.cfg.get("model_cli", "turbo")
+        if cur not in installed:
+            cur = installed[0] if installed else cur
+            self.cfg["model_cli"] = cur
+        if installed:
+            self.model_combo.set(self._model_display(cur))
+        else:
+            self.model_combo.set("")
+        self._refresh_model_status_label()
+
+    def _refresh_model_status_label(self):
+        installed = models_for_audio_language(
+            self.cfg.get("audio_lang_code", "pt"), only_installed=True)
+        if not installed:
+            self.model_status_var.set(self.t("no_models_installed"))
+            return
+        cli = self.cfg.get("model_cli", "turbo")
+        info = MODEL_INFO.get(cli, MODEL_INFO["turbo"])
+        downloaded, _ = is_model_downloaded(cli)
+        size = human_size(info["size_mb"])
+        if downloaded:
+            self.model_status_var.set(self.t("model_status") + " " +
+                                      self.t("model_downloaded", size=size, vram=info["vram_gb"]))
+        else:
+            self.model_status_var.set(self.t("model_status") + " " +
+                                      self.t("model_not_downloaded", size=size, vram=info["vram_gb"]))
+
+    def _refresh_dictionary_dropdown(self):
+        names = [self.t("none")] + sorted(self.dictionaries.keys())
+        self.dict_combo["values"] = names
+        sel = self.cfg.get("selected_dictionary", "")
+        if sel and sel in self.dictionaries:
+            self.dict_var.set(sel)
+        else:
+            self.dict_var.set(self.t("none"))
+
+    def _update_clip_gate(self):
+        has_ffmpeg = bool(self.ffmpeg_path)
+        enabled = self.clip_enabled_var.get() and has_ffmpeg
+        state = "normal" if (has_ffmpeg) else "disabled"
+        try:
+            self.clip_check.configure(state="normal" if has_ffmpeg else "disabled")
+            entry_state = "normal" if enabled else "disabled"
+            self.clip_start_entry.configure(state=entry_state)
+            self.clip_end_entry.configure(state=entry_state)
+            if not has_ffmpeg:
+                self.clip_enabled_var.set(False)
+                self.clip_hint_label.configure(text=self.t("clip_needs_ffmpeg"))
+            else:
+                self.clip_hint_label.configure(text=self.t("clip_hint"))
+        except (AttributeError, tk.TclError):
+            pass
+
+    # ======================================================================
+    # Change handlers
+    # ======================================================================
+    def _on_audio_lang_change(self, _event=None):
+        disp = self.audio_lang_var.get()
+        code = getattr(self, "_audio_code_by_display", {}).get(disp)
+        if code:
+            self.cfg["audio_lang_code"] = code
+            self._save_config()
+            self._refresh_model_dropdown()
+
+    def _on_model_change(self, _event=None):
+        disp = self.model_var.get()
+        cli = getattr(self, "_model_cli_by_display", {}).get(disp)
+        if cli:
+            self.cfg["model_cli"] = cli
+            self._save_config()
+            self._refresh_model_status_label()
+
+    def _on_task_change(self, _event=None):
+        idx = self.task_combo.current()
+        self.cfg["task"] = "translate" if idx == 1 else "transcribe"
+        self._save_config()
+
+    def _on_outdir_mode_change(self):
+        self.cfg["output_dir_mode"] = self.outdir_mode_var.get()
+        self._save_config()
+
+    def _browse_fixed_dir(self):
+        d = filedialog.askdirectory(title=self.t("select_output_title"))
+        if d:
+            self.fixed_dir_var.set(d)
+            self.cfg["fixed_output_dir"] = d
+            self.outdir_mode_var.set("fixed")
+            self.cfg["output_dir_mode"] = "fixed"
+            self._save_config()
+
+    def _browse_md_fixed_dir(self):
+        d = filedialog.askdirectory(title=self.t("select_output_title"))
+        if d:
+            self.md_fixed_dir_var.set(d)
+            self.md_outdir_mode_var.set("fixed")
+
+    # ======================================================================
+    # Queue operations (transcription)
+    # ======================================================================
+    def _add_files(self):
+        if self.is_running:
+            messagebox.showwarning(self.t("warn"), self.t("warn_queue_locked"))
+            return
+        paths = filedialog.askopenfilenames(
+            title=self.t("select_media_title"),
+            filetypes=[(self.t("media_files"), " ".join("*" + e for e in MEDIA_EXTENSIONS)),
+                       (self.t("all_files"), "*.*")])
+        existing = {it.filepath for it in self.queue_items}
+        added = 0
+        for p in paths:
+            if p not in existing:
+                self.queue_items.append(QueueItem(p))
+                added += 1
+        if paths and added == 0:
+            messagebox.showinfo(self.t("info"), self.t("info_all_in_queue"))
+        self._render_queue()
+
+    def _remove_selected(self):
+        if self.is_running:
+            messagebox.showwarning(self.t("warn"), self.t("warn_queue_locked"))
+            return
+        for iid in self.tree.selection():
+            idx = int(iid)
+            if 0 <= idx < len(self.queue_items):
+                self.queue_items[idx] = None
+        self.queue_items = [it for it in self.queue_items if it is not None]
+        self._render_queue()
+
+    def _clear_queue(self):
+        if self.is_running:
+            messagebox.showwarning(self.t("warn"), self.t("warn_queue_locked"))
+            return
+        self.queue_items = []
+        self._render_queue()
+
+    def _move_selected(self, direction):
+        if self.is_running:
+            messagebox.showwarning(self.t("warn"), self.t("warn_queue_locked"))
+            return
+        sel = self.tree.selection()
+        if not sel:
+            return
+        idx = int(sel[0])
+        new = idx + direction
+        if 0 <= new < len(self.queue_items):
+            self.queue_items[idx], self.queue_items[new] = \
+                self.queue_items[new], self.queue_items[idx]
+            self._render_queue()
+            self.tree.selection_set(str(new))
+
+    def _status_text(self, status):
+        return {ST_PENDING: self.t("status_pending"),
+                ST_RUNNING: self.t("status_running"),
+                ST_DONE: self.t("status_done"),
+                ST_ERROR: self.t("status_error"),
+                ST_SKIPPED: self.t("status_skipped")}.get(status, status)
+
+    def _render_queue(self):
+        self.tree.delete(*self.tree.get_children())
+        for i, it in enumerate(self.queue_items):
+            self.tree.insert("", "end", iid=str(i),
+                             values=(i + 1, it.filename,
+                                     os.path.dirname(it.filepath),
+                                     self._status_text(it.status)))
+
+    # ======================================================================
+    # Queue operations (MD tab)
+    # ======================================================================
+    def _md_add_files(self):
+        if self.md_is_running:
+            messagebox.showwarning(self.t("warn"), self.t("warn_queue_locked"))
+            return
+        paths = filedialog.askopenfilenames(
+            title=self.t("select_doc_title"),
+            filetypes=[(self.t("doc_files"), " ".join("*" + e for e in MARKITDOWN_EXTENSIONS)),
+                       (self.t("all_files"), "*.*")])
+        existing = {it.filepath for it in self.md_queue_items}
+        for p in paths:
+            if p not in existing:
+                self.md_queue_items.append(QueueItem(p))
+        self._render_md_queue()
+
+    def _md_remove_selected(self):
+        if self.md_is_running:
+            messagebox.showwarning(self.t("warn"), self.t("warn_queue_locked"))
+            return
+        for iid in self.md_tree.selection():
+            idx = int(iid)
+            if 0 <= idx < len(self.md_queue_items):
+                self.md_queue_items[idx] = None
+        self.md_queue_items = [it for it in self.md_queue_items if it is not None]
+        self._render_md_queue()
+
+    def _md_clear_queue(self):
+        if self.md_is_running:
+            messagebox.showwarning(self.t("warn"), self.t("warn_queue_locked"))
+            return
+        self.md_queue_items = []
+        self._render_md_queue()
+
+    def _md_status_text(self, status):
+        return {ST_PENDING: self.t("status_pending"),
+                ST_RUNNING: self.t("status_running_md"),
+                ST_DONE: self.t("status_done"),
+                ST_ERROR: self.t("status_error"),
+                ST_SKIPPED: self.t("status_skipped")}.get(status, status)
+
+    def _render_md_queue(self):
+        self.md_tree.delete(*self.md_tree.get_children())
+        for i, it in enumerate(self.md_queue_items):
+            self.md_tree.insert("", "end", iid=str(i),
+                                values=(i + 1, it.filename,
+                                        os.path.dirname(it.filepath),
+                                        self._md_status_text(it.status)))
+
+    # ======================================================================
+    # Dictionary operations
+    # ======================================================================
+    def _refresh_dict_listbox(self):
+        self.dict_listbox.delete(0, "end")
+        for name in sorted(self.dictionaries.keys()):
+            self.dict_listbox.insert("end", name)
+
+    def _on_dict_profile_select(self, _event=None):
+        sel = self.dict_listbox.curselection()
+        if not sel:
+            return
+        name = self.dict_listbox.get(sel[0])
+        prof = self.dictionaries.get(name, {})
+        self._dict_current = name
+        self.dict_name_var.set(name)
+        self.dict_prompt_text.delete("1.0", "end")
+        self.dict_prompt_text.insert("1.0", prof.get("initial_prompt") or prof.get("prompt") or "")
+        self.dict_repl_text.delete("1.0", "end")
+        repl = prof.get("replacements", [])
+        self.dict_repl_text.insert("1.0", "\n".join(f"{a}={b}" for a, b in repl))
+
+    def _dict_new(self):
+        self._dict_current = None
+        self.dict_name_var.set("")
+        self.dict_prompt_text.delete("1.0", "end")
+        self.dict_repl_text.delete("1.0", "end")
+        self.dict_listbox.selection_clear(0, "end")
+
+    def _dict_duplicate(self):
+        sel = self.dict_listbox.curselection()
+        if not sel:
+            messagebox.showinfo(self.t("info"), self.t("select_to_duplicate"))
+            return
+        name = self.dict_listbox.get(sel[0])
+        new_name = simpledialog.askstring(
+            self.t("dup_title"), self.t("dup_prompt"),
+            initialvalue=name + self.t("dup_suffix"), parent=self)
+        if not new_name:
+            return
+        if new_name in self.dictionaries:
+            messagebox.showerror(self.t("error"), self.t("err_dup_exists"))
+            return
+        self.dictionaries[new_name] = json.loads(json.dumps(self.dictionaries[name]))
+        save_json(DICTIONARIES_FILE, self.dictionaries)
+        self._refresh_dict_listbox()
+        self._refresh_dictionary_dropdown()
+
+    def _dict_delete(self):
+        sel = self.dict_listbox.curselection()
+        if not sel:
+            return
+        name = self.dict_listbox.get(sel[0])
+        if messagebox.askyesno(self.t("confirm"), self.t("delete_question", name=name)):
+            self.dictionaries.pop(name, None)
+            save_json(DICTIONARIES_FILE, self.dictionaries)
+            self._dict_new()
+            self._refresh_dict_listbox()
+            self._refresh_dictionary_dropdown()
+
+    def _dict_save(self):
+        name = self.dict_name_var.get().strip()
+        if not name:
+            messagebox.showerror(self.t("error"), self.t("err_no_profile_name"))
+            return
+        prompt = self.dict_prompt_text.get("1.0", "end").strip()
+        repl = parse_replacements_text(self.dict_repl_text.get("1.0", "end"))
+        if self._dict_current and self._dict_current != name:
+            self.dictionaries.pop(self._dict_current, None)
+        self.dictionaries[name] = {"initial_prompt": prompt, "replacements": repl}
+        save_json(DICTIONARIES_FILE, self.dictionaries)
+        self._dict_current = name
+        self._refresh_dict_listbox()
+        self._refresh_dictionary_dropdown()
+        messagebox.showinfo(self.t("saved"), self.t("profile_saved_msg", name=name))
+
+    # ======================================================================
+    # Streaming helpers for dialogs
+    # ======================================================================
+    def _append_text(self, widget, text):
+        try:
+            widget.configure(state="normal")
+            widget.insert("end", text)
+            widget.see("end")
+            widget.configure(state="disabled")
+        except tk.TclError:
+            pass
+
+    def _attach_stream(self, event_queue, log_text, on_finish):
+        def poll():
+            try:
+                while True:
+                    ev = event_queue.get_nowait()
+                    k = ev.get("kind")
+                    if k in ("log", "cmd_log", "md_log"):
+                        self._append_text(log_text, ev.get("text", ""))
+                    elif k == "dl_model_ok":
+                        self._append_text(log_text, self.t("log_model_ok"))
+                    elif k == "dl_finished":
+                        on_finish(bool(ev.get("success")), ev.get("error", ""))
+                        return
+                    elif k == "cmd_finished":
+                        rc = ev.get("returncode", 0)
+                        on_finish(rc == 0, "" if rc == 0 else str(rc))
+                        return
+            except queue.Empty:
+                pass
+            self.after(120, poll)
+        poll()
+
+    # ======================================================================
+    # Settings: Whisper
+    # ======================================================================
+    def _open_whisper_settings(self, focus=None):
+        dlg = tk.Toplevel(self)
+        dlg.title(self.t("set_whisper_title"))
+        dlg.transient(self)
+        dlg.geometry("760x640")
+        frm = ttk.Frame(dlg)
+        frm.pack(fill="both", expand=True, padx=10, pady=10)
+        frm.columnconfigure(0, weight=1)
+
+        # status
+        status_var = tk.StringVar()
+
+        def refresh_status():
+            self.whisper_path = find_whisper_path(self.cfg.get("whisper_path") or None)
+            if self.whisper_path:
+                status_var.set(self.t("set_whisper_found", path=self.whisper_path))
+            else:
+                status_var.set(self.t("set_whisper_missing"))
+            self._refresh_status_indicators()
+        ttk.Label(frm, textvariable=status_var, foreground="#444",
+                  wraplength=720).grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        # executable row
+        exrow = ttk.LabelFrame(frm, text=self.t("set_whisper_exe"))
+        exrow.grid(row=1, column=0, sticky="ew", pady=4)
+        exrow.columnconfigure(0, weight=1)
+        exe_var = tk.StringVar(value=self.cfg.get("whisper_path", ""))
+        ttk.Entry(exrow, textvariable=exe_var).grid(row=0, column=0, sticky="ew", padx=6, pady=6)
+
+        def browse_exe():
+            p = filedialog.askopenfilename(title=self.t("select_whisper_title"), parent=dlg)
+            if p:
+                exe_var.set(p)
+                self.cfg["whisper_path"] = p
+                self._save_config()
+                refresh_status()
+        ttk.Button(exrow, text=self.t("browse"), command=browse_exe).grid(row=0, column=1, padx=4, pady=6)
+
+        # models manager
+        mf = ttk.LabelFrame(frm, text=self.t("set_models_title"))
+        mf.grid(row=2, column=0, sticky="nsew", pady=4)
+        mf.columnconfigure(0, weight=1)
+        frm.rowconfigure(2, weight=1)
+        model_list = tk.Listbox(mf, height=8, exportselection=False)
+        model_list.grid(row=0, column=0, sticky="nsew", padx=6, pady=6)
+        mf.rowconfigure(0, weight=1)
+
+        def fill_models():
+            model_list.delete(0, "end")
+            for cli in ALL_MODEL_CLIS:
+                downloaded, _ = is_model_downloaded(cli)
+                tag = self.t("installed_tag") if downloaded else ""
+                model_list.insert("end", f"{cli}{tag}  —  {self.t(MODEL_INFO[cli]['desc_key'])}")
+        fill_models()
+
+        dl_log = tk.Text(mf, height=6, wrap="word", state="disabled", font=("TkFixedFont", 9))
+        dl_log.grid(row=1, column=0, sticky="ew", padx=6, pady=(0, 6))
+
+        def download_model():
+            sel = model_list.curselection()
+            if not sel:
+                return
+            cli = ALL_MODEL_CLIS[sel[0]]
+            if not self.whisper_path:
+                messagebox.showerror(self.t("error"), self.t("err_no_whisper"), parent=dlg)
+                return
+            info = MODEL_INFO[cli]
+            self._append_text(dl_log, self.t("log_download_start",
+                                             model=cli, size=human_size(info["size_mb"])))
+            stop = threading.Event()
+            q = queue.Queue()
+            worker = ModelDownloadWorker(self.whisper_path, cli, q, stop)
+            dl_btn.configure(state="disabled")
+            worker.start()
+
+            def done(success, error):
+                dl_btn.configure(state="normal")
+                if not success and error:
+                    self._append_text(dl_log, f"\n[ERROR] {error}\n")
+                fill_models()
+                self._refresh_model_dropdown()
+            self._attach_stream(q, dl_log, done)
+        dl_btn = ttk.Button(mf, text=self.t("set_models_download"), command=download_model)
+        dl_btn.grid(row=2, column=0, sticky="w", padx=6, pady=(0, 6))
+
+        # install whisper
+        irow = ttk.Frame(frm)
+        irow.grid(row=3, column=0, sticky="ew", pady=4)
+        install_log = tk.Text(irow, height=5, wrap="word", state="disabled", font=("TkFixedFont", 9))
+
+        def install_whisper():
+            py = find_python_executable()
+            cmd = build_pip_install_command(py, "openai-whisper")
+            if not messagebox.askyesno(self.t("confirm"),
+                                       self.t("set_whisper_install_q", cmd=" ".join(cmd)),
+                                       parent=dlg):
+                return
+            install_log.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+            self._append_text(install_log, self.t("install_running"))
+            stop = threading.Event()
+            q = queue.Queue()
+            worker = CommandStreamWorker(cmd, q, stop, tag="whisper")
+            inst_btn.configure(state="disabled")
+            worker.start()
+
+            def done(success, error):
+                inst_btn.configure(state="normal")
+                self._append_text(install_log,
+                                  self.t("install_done_ok") if success
+                                  else self.t("install_done_fail", code=error))
+                refresh_status()
+                self._refresh_model_dropdown()
+            self._attach_stream(q, install_log, done)
+        irow.columnconfigure(0, weight=1)
+        inst_btn = ttk.Button(irow, text=self.t("set_whisper_install"), command=install_whisper)
+        inst_btn.grid(row=0, column=0, sticky="w")
+
+        # languages manager
+        lf = ttk.LabelFrame(frm, text=self.t("set_langs_title"))
+        lf.grid(row=4, column=0, sticky="ew", pady=4)
+        lf.columnconfigure(0, weight=1)
+        lang_list = tk.Listbox(lf, height=5, exportselection=False)
+        lang_list.grid(row=0, column=0, rowspan=2, sticky="ew", padx=6, pady=6)
+
+        def fill_langs():
+            lang_list.delete(0, "end")
+            for c in self.cfg.get("audio_langs", []):
+                lang_list.insert("end", self._audio_lang_display(c))
+        fill_langs()
+
+        addrow = ttk.Frame(lf)
+        addrow.grid(row=2, column=0, columnspan=2, sticky="ew", padx=6, pady=(0, 6))
+        ttk.Label(addrow, text=self.t("set_lang_pick")).pack(side="left")
+        all_lang_displays = [f"{name} ({code})" for code, name in
+                             sorted(WHISPER_LANGUAGES.items(), key=lambda kv: kv[1])]
+        add_var = tk.StringVar()
+        add_combo = ttk.Combobox(addrow, textvariable=add_var, values=all_lang_displays,
+                                 state="readonly", width=28)
+        add_combo.pack(side="left", padx=6)
+
+        def add_lang():
+            disp = add_var.get()
+            m = re.search(r"\(([a-z]{2,3})\)\s*$", disp)
+            if not m:
+                return
+            code = m.group(1)
+            if code not in self.cfg["audio_langs"]:
+                self.cfg["audio_langs"].append(code)
+                self._save_config()
+                fill_langs()
+                self._refresh_audio_lang_dropdown()
+                self._refresh_model_dropdown()
+        ttk.Button(addrow, text=self.t("set_lang_add"), command=add_lang).pack(side="left", padx=4)
+
+        def remove_lang():
+            sel = lang_list.curselection()
+            if not sel:
+                return
+            code = self.cfg["audio_langs"][sel[0]]
+            self.cfg["audio_langs"].pop(sel[0])
+            if not self.cfg["audio_langs"]:
+                self.cfg["audio_langs"] = ["auto"]
+            if self.cfg.get("audio_lang_code") == code:
+                self.cfg["audio_lang_code"] = self.cfg["audio_langs"][0]
+            self._save_config()
+            fill_langs()
+            self._refresh_audio_lang_dropdown()
+            self._refresh_model_dropdown()
+        ttk.Button(lf, text=self.t("set_lang_remove"), command=remove_lang
+                   ).grid(row=1, column=1, sticky="w", padx=6)
+
+        ttk.Button(frm, text=self.t("close"), command=dlg.destroy).grid(row=5, column=0, sticky="e", pady=8)
+        refresh_status()
+        if focus == "models":
+            try:
+                model_list.focus_set()
+            except tk.TclError:
+                pass
+        elif focus == "langs":
+            try:
+                lang_list.focus_set()
+            except tk.TclError:
+                pass
+
+    # ======================================================================
+    # Settings: MarkItDown
+    # ======================================================================
+    def _open_markitdown_settings(self):
+        dlg = tk.Toplevel(self)
+        dlg.title(self.t("set_markitdown_title"))
+        dlg.transient(self)
+        dlg.geometry("680x460")
+        frm = ttk.Frame(dlg)
+        frm.pack(fill="both", expand=True, padx=10, pady=10)
+        frm.columnconfigure(0, weight=1)
+        frm.rowconfigure(3, weight=1)
+
+        ttk.Label(frm, text=self.t("set_markitdown_about"), foreground="#555",
+                  wraplength=640).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        status_var = tk.StringVar()
+
+        def refresh_status():
+            self.python_exe = markitdown_python(self.cfg)
+            self.markitdown_ok = markitdown_is_available(self.python_exe)
+            if self.markitdown_ok:
+                status_var.set(self.t("set_markitdown_found", py=self.python_exe))
+            else:
+                status_var.set(self.t("set_markitdown_missing"))
+            self._refresh_status_indicators()
+        ttk.Label(frm, textvariable=status_var, foreground="#444",
+                  wraplength=640).grid(row=1, column=0, sticky="w", pady=4)
+
+        btnrow = ttk.Frame(frm)
+        btnrow.grid(row=2, column=0, sticky="w", pady=4)
+        log = tk.Text(frm, height=10, wrap="word", state="disabled", font=("TkFixedFont", 9))
+        log.grid(row=3, column=0, sticky="nsew", pady=6)
+
+        def install_md():
+            py = find_python_executable()
+            cmd = build_pip_install_command(py, "markitdown[all]")
+            if not messagebox.askyesno(self.t("confirm"),
+                                       self.t("set_markitdown_install_q", cmd=" ".join(cmd)),
+                                       parent=dlg):
+                return
+            self._append_text(log, self.t("install_running"))
+            stop = threading.Event()
+            q = queue.Queue()
+            worker = CommandStreamWorker(cmd, q, stop, tag="md")
+            inst_btn.configure(state="disabled")
+            worker.start()
+
+            def done(success, error):
+                inst_btn.configure(state="normal")
+                self._append_text(log, self.t("install_done_ok") if success
+                                  else self.t("install_done_fail", code=error))
+                refresh_status()
+            self._attach_stream(q, log, done)
+        inst_btn = ttk.Button(btnrow, text=self.t("set_markitdown_install"), command=install_md)
+        inst_btn.pack(side="left", padx=2)
+        ttk.Button(btnrow, text=self.t("set_recheck"), command=refresh_status).pack(side="left", padx=2)
+        ttk.Button(frm, text=self.t("close"), command=dlg.destroy).grid(row=4, column=0, sticky="e", pady=6)
+        refresh_status()
+
+    # ======================================================================
+    # Settings: FFmpeg
+    # ======================================================================
+    def _open_ffmpeg_settings(self):
+        dlg = tk.Toplevel(self)
+        dlg.title(self.t("set_ffmpeg_title"))
+        dlg.transient(self)
+        dlg.geometry("700x500")
+        frm = ttk.Frame(dlg)
+        frm.pack(fill="both", expand=True, padx=10, pady=10)
+        frm.columnconfigure(0, weight=1)
+        frm.rowconfigure(3, weight=1)
+
+        status_var = tk.StringVar()
+
+        def refresh_status():
+            self.ffmpeg_path = find_ffmpeg(self.cfg.get("ffmpeg_path") or None)
+            if self.ffmpeg_path:
+                status_var.set(self.t("set_ffmpeg_found", path=self.ffmpeg_path))
+            else:
+                status_var.set(self.t("set_ffmpeg_missing"))
+            self._refresh_status_indicators()
+            self._update_clip_gate()
+        ttk.Label(frm, textvariable=status_var, foreground="#444",
+                  wraplength=660).grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        row1 = ttk.Frame(frm)
+        row1.grid(row=1, column=0, sticky="w", pady=4)
+
+        def locate():
+            p = filedialog.askopenfilename(title=self.t("select_ffmpeg_title"), parent=dlg)
+            if p:
+                self.cfg["ffmpeg_path"] = p
+                self._save_config()
+                refresh_status()
+        ttk.Button(row1, text=self.t("ffmpeg_locate"), command=locate).pack(side="left", padx=2)
+
+        def open_folder():
+            self.ffmpeg_path = find_ffmpeg(self.cfg.get("ffmpeg_path") or None)
+            if self.ffmpeg_path:
+                self._open_path(os.path.dirname(self.ffmpeg_path))
+        ttk.Button(row1, text=self.t("ffmpeg_open_folder"), command=open_folder).pack(side="left", padx=2)
+
+        row2 = ttk.Frame(frm)
+        row2.grid(row=2, column=0, sticky="w", pady=4)
+        log = tk.Text(frm, height=10, wrap="word", state="disabled", font=("TkFixedFont", 9))
+        log.grid(row=3, column=0, sticky="nsew", pady=6)
+
+        def auto_install():
+            dest = str(FFMPEG_INSTALL_DIR)
+            if not messagebox.askyesno(self.t("confirm"),
+                                       self.t("set_ffmpeg_auto_q", dest=dest), parent=dlg):
+                return
+            auto_btn.configure(state="disabled")
+            self._start_ffmpeg_auto(log, lambda ok, path: (
+                auto_btn.configure(state="normal"), refresh_status()))
+
+        def winget_install():
+            cmd = ["winget", "install", "-e", "--id", "Gyan.FFmpeg",
+                   "--accept-package-agreements", "--accept-source-agreements"]
+            self._append_text(log, self.t("install_running"))
+            stop = threading.Event()
+            q = queue.Queue()
+            worker = CommandStreamWorker(cmd, q, stop, tag="ffmpeg")
+            worker.start()
+
+            def done(success, error):
+                self._append_text(log, self.t("install_done_ok") if success
+                                  else self.t("install_done_fail", code=error))
+                refresh_status()
+            self._attach_stream(q, log, done)
+
+        auto_btn = ttk.Button(row2, text=self.t("set_ffmpeg_install_auto"), command=auto_install)
+        auto_btn.pack(side="left", padx=2)
+        if os.name == "nt":
+            ttk.Button(row2, text=self.t("set_ffmpeg_winget"), command=winget_install).pack(side="left", padx=2)
+        ttk.Button(row2, text=self.t("set_ffmpeg_open_page"),
+                   command=lambda: webbrowser.open(FFMPEG_DOWNLOAD_URL)).pack(side="left", padx=2)
+        ttk.Button(frm, text=self.t("close"), command=dlg.destroy).grid(row=4, column=0, sticky="e", pady=6)
+        refresh_status()
+
+    def _start_ffmpeg_auto(self, log_text, on_finish):
+        q = queue.Queue()
+
+        def work():
+            try:
+                FFMPEG_INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+                url = FFMPEG_WIN_BUILD_URL
+                q.put(("log", self.t("set_ffmpeg_downloading")))
+                tmp = FFMPEG_INSTALL_DIR / "ffmpeg_download.zip"
+                urllib.request.urlretrieve(url, str(tmp))
+                q.put(("log", self.t("set_ffmpeg_extracting")))
+                exe = extract_ffmpeg_archive(str(tmp), FFMPEG_INSTALL_DIR)
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+                if not exe:
+                    raise RuntimeError("ffmpeg executable not found in archive")
+                self.cfg["ffmpeg_path"] = exe
+                self._save_config()
+                q.put(("done", exe))
+            except Exception as e:
+                q.put(("fail", str(e)))
+        threading.Thread(target=work, daemon=True).start()
+
+        def poll():
+            try:
+                while True:
+                    k, v = q.get_nowait()
+                    if k == "log":
+                        self._append_text(log_text, v)
+                    elif k == "done":
+                        self._append_text(log_text, self.t("set_ffmpeg_done", path=v))
+                        on_finish(True, v)
+                        return
+                    elif k == "fail":
+                        self._append_text(log_text, self.t("set_ffmpeg_fail", e=v))
+                        on_finish(False, v)
+                        return
+            except queue.Empty:
+                pass
+            self.after(150, poll)
+        poll()
+
+    # ======================================================================
+    # Settings: Output formats
+    # ======================================================================
+    def _open_output_formats(self):
+        dlg = tk.Toplevel(self)
+        dlg.title(self.t("output_formats_title"))
+        dlg.transient(self)
+        dlg.geometry("640x360")
+        frm = ttk.Frame(dlg)
+        frm.pack(fill="both", expand=True, padx=12, pady=12)
+        frm.columnconfigure(0, weight=1)
+        ttk.Label(frm, text=self.t("output_formats")).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        self.format_vars = {}
+        for i, fmt in enumerate(OUTPUT_FORMATS):
+            var = tk.BooleanVar(value=self.cfg["output_formats"].get(fmt, True))
+            self.format_vars[fmt] = var
+
+            def make_cb(f=fmt, v=var):
+                def cb():
+                    self.cfg["output_formats"][f] = v.get()
+                    self._save_config()
+                return cb
+            ttk.Checkbutton(frm, text=self.t("fmt_" + fmt), variable=var,
+                            command=make_cb()).grid(row=i + 1, column=0, sticky="w", pady=2)
+        ttk.Button(frm, text=self.t("close"), command=dlg.destroy
+                   ).grid(row=len(OUTPUT_FORMATS) + 1, column=0, sticky="e", pady=10)
+
+    # ======================================================================
+    # About
+    # ======================================================================
+    def _open_about(self):
+        dlg = tk.Toplevel(self)
+        dlg.title(self.t("about_title"))
+        dlg.transient(self)
+        dlg.resizable(False, False)
+        frm = ttk.Frame(dlg)
+        frm.pack(fill="both", expand=True, padx=24, pady=20)
+        try:
+            ttk.Label(frm, image=self._icon_img).pack(pady=(0, 8))
+        except Exception:
+            pass
+        ttk.Label(frm, text=APP_NAME, font=("TkDefaultFont", 16, "bold")).pack()
+        ttk.Label(frm, text=f"{self.t('about_version')}: {APP_VERSION}").pack(pady=(8, 0))
+        ttk.Label(frm, text=f"{self.t('about_author')}: {APP_AUTHOR}").pack()
+        ttk.Label(frm, text=f"{self.t('about_contact')}: {APP_CONTACT}").pack()
+        ttk.Button(frm, text=self.t("close"), command=dlg.destroy).pack(pady=(16, 0))
+
+    # ======================================================================
+    # Open helpers
+    # ======================================================================
+    def _open_path(self, path):
+        if not path or not os.path.exists(path):
+            return
+        try:
+            if os.name == "nt":
+                os.startfile(path)  # noqa
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception:
+            pass
+
+    def _open_output_folder(self):
+        for it in self.queue_items:
+            if it.output_dir:
+                self._open_path(it.output_dir)
+                return
+
+    def _md_open_output_folder(self):
+        for it in self.md_queue_items:
+            if it.output_dir:
+                self._open_path(it.output_dir)
+                return
+
+    # ======================================================================
+    # Transcription run
+    # ======================================================================
+    def _selected_keep_formats(self):
+        return [f for f in OUTPUT_FORMATS if self.cfg["output_formats"].get(f, False)]
+
+    def _selected_dictionary_payload(self):
+        name = self.dict_var.get()
+        if not name or name == self.t("none"):
+            return "", []
+        prof = self.dictionaries.get(name, {})
+        return (prof.get("initial_prompt") or prof.get("prompt") or ""), prof.get("replacements", [])
+
+    def _validate_clip(self):
+        if not self.clip_enabled_var.get():
+            return None, None
+        if not self.ffmpeg_path:
+            return None, "err_clip_needs_ffmpeg"
+        start = parse_hms_to_seconds(self.clip_start_var.get())
+        end = parse_hms_to_seconds(self.clip_end_var.get())
+        if start is None or end is None or end <= start:
+            return None, "err_clip_invalid"
+        return (start, end), None
+
+    def _start_batch(self):
+        if self.is_running:
+            return
+        if not self.queue_items:
+            messagebox.showerror(self.t("error"), self.t("err_no_files"))
+            return
+        if not self.whisper_path:
+            messagebox.showerror(self.t("error"), self.t("err_no_whisper"))
+            self._open_whisper_settings()
+            return
+        installed = models_for_audio_language(
+            self.cfg.get("audio_lang_code", "pt"), only_installed=True)
+        model = self.cfg.get("model_cli", "")
+        if not installed or model not in installed:
+            messagebox.showerror(self.t("error"), self.t("err_no_model_selected"))
+            self._open_whisper_settings(focus="models")
+            return
+        keep = self._selected_keep_formats()
+        if not keep:
+            messagebox.showerror(self.t("error"), self.t("err_no_format"))
+            self._open_output_formats()
+            return
+        if self.outdir_mode_var.get() == "fixed" and not self.fixed_dir_var.get().strip():
+            messagebox.showerror(self.t("error"), self.t("err_no_fixed_dir"))
+            return
+        clip_range, clip_err = self._validate_clip()
+        if clip_err:
+            messagebox.showerror(self.t("error"), self.t(clip_err))
+            return
+        if not self.ffmpeg_path:
+            if not messagebox.askyesno(self.t("warn"), self.t("ffmpeg_missing_warn")):
+                return
+
+        # reset statuses
+        for it in self.queue_items:
+            it.status = ST_PENDING
+            it.error_message = ""
+            it.output_dir = None
+        self._render_queue()
+
+        prompt, replacements = self._selected_dictionary_payload()
+        lang_param = audio_lang_param(self.cfg.get("audio_lang_code", "pt"))
+        task = self.cfg.get("task", "transcribe")
+
+        self.stop_flag = threading.Event()
+        self.worker = TranscriptionWorker(
+            items=self.queue_items, whisper_exe=self.whisper_path,
+            ffmpeg_path=self.ffmpeg_path, lang_param=lang_param, task=task,
+            model_name=model, initial_prompt=prompt, replacements=replacements,
+            keep_formats=keep, output_dir_mode=self.outdir_mode_var.get(),
+            fixed_output_dir=self.fixed_dir_var.get().strip(),
+            clip_range=clip_range, strings=self.s,
+            event_queue=self.event_queue, stop_flag=self.stop_flag)
+        self.is_running = True
+        self._batch_start_time = time.time()
+        self._batch_done = 0
+        self._batch_errors = 0
+        self._cur_duration = None
+        self._set_running_ui(True)
+        self._clear_log(self.log_text)
+        self._append_text(self.log_text, self.t("log_batch_start",
+                                                time=datetime.now().strftime("%H:%M:%S")))
+        self.worker.start()
+
+    def _cancel_batch(self):
+        if self.is_running and self.worker:
+            if messagebox.askyesno(self.t("cancel_title"), self.t("cancel_question")):
+                self._append_text(self.log_text, self.t("log_canceling"))
+                self.worker.cancel()
+
+    def _set_running_ui(self, running):
+        self.start_btn.configure(state="disabled" if running else "normal")
+        self.cancel_btn.configure(state="normal" if running else "disabled")
+        self.open_out_btn.configure(state="disabled" if running else "normal")
+
+    def _clear_log(self, widget):
+        widget.configure(state="normal")
+        widget.delete("1.0", "end")
+        widget.configure(state="disabled")
+
+    def _poll_events(self):
+        try:
+            while True:
+                ev = self.event_queue.get_nowait()
+                self._handle_event(ev)
+        except queue.Empty:
+            pass
+        self.after(120, self._poll_events)
+
+    def _handle_event(self, ev):
+        kind = ev.get("kind")
+        if kind == "log":
+            self._append_text(self.log_text, ev.get("text", ""))
+        elif kind == "item_status":
+            idx = ev.get("index")
+            status = ev.get("status")
+            if 0 <= idx < len(self.queue_items):
+                self.queue_items[idx].status = status
+                self.tree.set(str(idx), "status", self._status_text(status))
+            if status == ST_RUNNING:
+                self.progress.configure(mode="determinate", value=0)
+                self._cur_file_start = time.time()
+                self.progress_label_var.set(self.t("batch_progress",
+                                            done=self._batch_done, total=len(self.queue_items)))
+            elif status in ST_TERMINAL:
+                if status == ST_DONE:
+                    self._batch_done += 1
+                elif status == ST_ERROR:
+                    self._batch_errors += 1
+        elif kind == "duration":
+            self._cur_duration = ev.get("seconds")
+        elif kind == "phase":
+            phase = ev.get("phase")
+            if phase == "preparing":
+                self.progress.configure(mode="indeterminate")
+                self.progress.start(12)
+                self.progress_label_var.set(self.t("phase_preparing"))
+            elif phase == "transcribing":
+                self.progress.stop()
+                self.progress.configure(mode="determinate", value=0)
+                self.progress_label_var.set(self.t("phase_transcribing_note"))
+        elif kind == "progress_tick":
+            pos = ev.get("seconds")
+            if self._cur_duration and self._cur_duration > 0 and pos is not None:
+                pct = max(0, min(100, pos / self._cur_duration * 100))
+                self.progress.configure(value=pct)
+                elapsed = time.time() - getattr(self, "_cur_file_start", time.time())
+                eta = (elapsed / pct * (100 - pct)) if pct > 1 else None
+                self.progress_label_var.set(
+                    self.t("batch_progress", done=self._batch_done, total=len(self.queue_items))
+                    + f"  ·  {self.t('position', pos=fmt_hms(pos))}"
+                    + f"  ·  {self.t('elapsed', elapsed=fmt_hms(elapsed))}"
+                    + (f"  ·  {self.t('eta', eta=fmt_hms(eta))}" if eta else ""))
+        elif kind == "batch_finished":
+            self._on_batch_finished()
+
+    def _on_batch_finished(self):
+        self.is_running = False
+        self.worker = None
+        self.progress.stop()
+        self.progress.configure(mode="determinate", value=100)
+        self._set_running_ui(False)
+        self._append_text(self.log_text, self.t("log_batch_end",
+                                                time=datetime.now().strftime("%H:%M:%S")))
+        self.progress_label_var.set(self.t("batch_finished_label",
+                                    done=self._batch_done, errors=self._batch_errors))
+        if self._batch_errors:
+            messagebox.showwarning(self.t("finished_with_errors_title"),
+                                   self.t("finished_with_errors_msg",
+                                          done=self._batch_done, errors=self._batch_errors))
+        else:
+            messagebox.showinfo(self.t("finished_title"),
+                                self.t("finished_msg", done=self._batch_done))
+
+    # ======================================================================
+    # MD batch run
+    # ======================================================================
+    def _start_md_batch(self):
+        if self.md_is_running:
+            return
+        if not self.md_queue_items:
+            messagebox.showerror(self.t("error"), self.t("err_no_files"))
+            return
+        # MarkItDown required only if a non-subtitle file is queued.
+        needs_md = any(os.path.splitext(it.filepath)[1].lower() not in SUBTITLE_EXTENSIONS
+                       for it in self.md_queue_items)
+        if needs_md and not self.markitdown_ok:
+            messagebox.showerror(self.t("error"), self.t("err_no_markitdown"))
+            self._open_markitdown_settings()
+            return
+        if self.md_outdir_mode_var.get() == "fixed" and not self.md_fixed_dir_var.get().strip():
+            messagebox.showerror(self.t("error"), self.t("err_no_fixed_dir"))
+            return
+        for it in self.md_queue_items:
+            it.status = ST_PENDING
+            it.error_message = ""
+            it.output_dir = None
+        self._render_md_queue()
+        self.md_stop_flag = threading.Event()
+        self.md_worker = ConversionWorker(
+            items=self.md_queue_items, python_exe=markitdown_python(self.cfg),
+            markitdown_ok=self.markitdown_ok,
+            output_dir_mode=self.md_outdir_mode_var.get(),
+            fixed_output_dir=self.md_fixed_dir_var.get().strip(),
+            strings=self.s, event_queue=self.md_event_queue, stop_flag=self.md_stop_flag)
+        self.md_is_running = True
+        self._md_done = 0
+        self._md_errors = 0
+        self._md_total = len(self.md_queue_items)
+        self.md_start_btn.configure(state="disabled")
+        self.md_cancel_btn.configure(state="normal")
+        self.md_open_out_btn.configure(state="disabled")
+        self._clear_log(self.md_log_text)
+        self._append_text(self.md_log_text, self.t("log_batch_start",
+                                                   time=datetime.now().strftime("%H:%M:%S")))
+        self.md_progress.configure(value=0)
+        self.md_worker.start()
+
+    def _cancel_md_batch(self):
+        if self.md_is_running and self.md_worker:
+            if messagebox.askyesno(self.t("cancel_title"), self.t("cancel_question")):
+                self._append_text(self.md_log_text, self.t("log_canceling"))
+                self.md_worker.cancel()
+
+    def _poll_md_events(self):
+        try:
+            while True:
+                ev = self.md_event_queue.get_nowait()
+                self._handle_md_event(ev)
+        except queue.Empty:
+            pass
+        self.after(120, self._poll_md_events)
+
+    def _handle_md_event(self, ev):
+        kind = ev.get("kind")
+        if kind == "md_log":
+            self._append_text(self.md_log_text, ev.get("text", ""))
+        elif kind == "md_item_status":
+            idx = ev.get("index")
+            status = ev.get("status")
+            if 0 <= idx < len(self.md_queue_items):
+                self.md_queue_items[idx].status = status
+                self.md_tree.set(str(idx), "status", self._md_status_text(status))
+            if status in ST_TERMINAL:
+                if status == ST_DONE:
+                    self._md_done += 1
+                elif status == ST_ERROR:
+                    self._md_errors += 1
+                total = max(1, getattr(self, "_md_total", 1))
+                self.md_progress.configure(
+                    value=(self._md_done + self._md_errors) / total * 100)
+                self.md_progress_label_var.set(self.t("batch_progress",
+                                               done=self._md_done + self._md_errors, total=total))
+        elif kind == "md_batch_finished":
+            self._on_md_batch_finished()
+
+    def _on_md_batch_finished(self):
+        self.md_is_running = False
+        self.md_worker = None
+        self.md_progress.configure(value=100)
+        self.md_start_btn.configure(state="normal")
+        self.md_cancel_btn.configure(state="disabled")
+        self.md_open_out_btn.configure(state="normal")
+        self._append_text(self.md_log_text, self.t("log_batch_end",
+                                                   time=datetime.now().strftime("%H:%M:%S")))
+        self.md_progress_label_var.set(self.t("batch_finished_label",
+                                       done=self._md_done, errors=self._md_errors))
+        if self._md_errors:
+            messagebox.showwarning(self.t("finished_with_errors_title"),
+                                   self.t("finished_with_errors_msg",
+                                          done=self._md_done, errors=self._md_errors))
+        else:
+            messagebox.showinfo(self.t("finished_title"),
+                                self.t("finished_msg", done=self._md_done))
+
+    # ======================================================================
+    # Language switch / close
+    # ======================================================================
+    def _switch_language(self, code):
+        if code not in TRANSLATIONS or code == self.lang:
+            return
+        if self.is_running or self.md_is_running:
+            self._menu_lang_var.set(self.lang)
+            messagebox.showwarning(self.t("warn"), self.t("warn_queue_locked"))
+            return
+        self.lang = code
+        self.s = TRANSLATIONS[code]
+        self.cfg["ui_language"] = code
+        self._save_config()
+        self.title(self.s["window_title"])
+        self._build_menubar()
+        self._build_ui()
+        self._render_queue()
+        self._render_md_queue()
+
+    def _on_close(self):
+        if self.is_running or self.md_is_running:
+            if not messagebox.askyesno(self.t("exit_title"), self.t("exit_question")):
+                return
+            if self.worker:
+                self.worker.cancel()
+            if self.md_worker:
+                self.md_worker.cancel()
+        self.destroy()
+
+
+def main():
+    app = TranscriptLabApp()
+    app.mainloop()
+
+
+if __name__ == "__main__":
+    main()
