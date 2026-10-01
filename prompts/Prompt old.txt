@@ -1,0 +1,40 @@
+You are revising TranscriptLab, my single-file Python 3.12 / Tkinter Windows desktop app (current file: TranscriptLab_v_0_10_4.py in the project). Do NOT write code yet. First produce a phased implementation plan and wait for my explicit "Approved" before coding.
+
+Standing constraints (apply to every change):
+- Single .py file; surgical str_replace edits on the existing file.
+- Bump APP_VERSION; the app header must reflect the new version.
+- Every user-facing string in BOTH PT-BR and EN (the app has full PT/EN UI switching).
+- Before delivery: headless GUI tests under xvfb + unittest must all pass; mock all YouTube/Whisper/network/live paths.
+- Ask at most 1-3 short clarifying questions, and only if something is genuinely ambiguous.
+
+Changes to implement:
+
+1. Tool-status first line on every tab. Each tab that depends on external tools shows the tool names + icons at the top, matching the A/V Transcription tab — including MD File Generation (MarkItDown) and YouTube Link Grabber (yt-dlp). To the right of the tool row, red bold text prompting installation (e.g. "<- Install these tools for the application to work"). Any tool detected as missing is shown in red with a note that it must be installed or the app won't function.
+
+2. "Open folder" button beside the output/destination path field on each relevant tab (A/V Transcription, YouTube Download, MD File Generation, and next to the CSV save path on Link Grabber). Opens that folder in Windows Explorer (folder only, no file preselection).
+
+3. "Check for updates" in Settings covering ALL external tools the app uses (yt-dlp, Whisper, FFmpeg, MarkItDown, youtube-transcript-api, and any others). Compare installed vs latest; if an update exists, help the user update using the same install method that tool currently uses (pip upgrade for pip tools; download-and-replace for FFmpeg), removing the old version.
+
+4. "Copy failed links" button for the YouTube Transcriptor and YouTube Download queues, placed in the upper part of the queue panel, visually separated from the per-item/bottom action buttons. Copies all links that errored.
+
+5. Add opt-in, user-controlled YouTube-block mitigations, all OFF by default and toggleable in Settings: (a) cookies-from-browser for yt-dlp, with a clear warning that using the user's own session may get his account rate-limited for normal viewing; (b) configurable sleep interval + download rate limit; (c) optional SOCKS/HTTP proxy field; (d) on detecting a block, auto-pause the queue and prompt the user to switch VPN server manually, then resume. Enabling any of these is the user's choice. Research what Arroxy does since it uses yt-dlt and the application has a very strong process to avoid IP blocking on youtube, here it its github for your research and plan:https://github.com/antonio-orionus/Arroxy
+
+6. If a video's duration is under 10:00, set the header Type/Tipo to "Short". Duration-based only;
+
+7. YouTube Download tab: "Define Header" is enabled only when "Transcribe video after download" is checked; grayed out otherwise.
+
+8. Any Browse button opens its dialog at the folder currently shown in that browse field, not the last folder used by Windows Explorer.
+
+9. Show a spinning "working" indicator in the top-right of any window where the user must wait for processing. The spinning "working" indicator shall be similar to the one on iphone and shall have a transparent background to avoid overlap the UI and mark it with "white" color inside the spinning indicator.  The ideal location is at the right upper part below the icons to minimize the app (-), maximize the app and close the app (X), in the same line as the name of the application "TranscripLab v0.10.4" but at the other side of the UI window.
+
+10. Members-only detection: before processing each queued YouTube item (transcription or download), probe it; if it is members-only, paint that queue row red and label it "members only". If the user leaves it in the queue, skip it (do not process). Add a probe timeout so detection cannot hang the queue.
+
+11. Header metadata from file: when transcribing a local audio/video file, prefer embedded file metadata (title, and source/link if present in any field of the video metafile) to fill the header when available; fall back to filename for Title and regular Source inteligrnce already present in the code if metadata is missing. Use a timeout on the metadata probe.
+
+12. Link Grabber tab: replace the three radio options (Title+Link / Link Only / Title+Duration+Link) with three checkboxes: "Video Title" (label "(may be slow)"), "Video Duration" (label "(may be very slow)"), "Video Link". Build output from whichever boxes are checked. Default: only "Video Link" checked. Delete the now-unused "Include duration" checkbox.
+
+13. Duration header fix: when a raw transcript being converted to MD contains timestamps, the header Duration/Duração must use the LAST timestamp in the file, not the first or the ones on top as the application does today. Support both formats seen in my raw files: inline parenthesized like "(00:03)" / "(1:02:03)", and bare timestamps on their own line like "0:00", "41:50", "1:02:03", "1:02:03:250" and others similar.
+
+14. Settings toggle to switch ALL headers between Portuguese and English globally; default Portuguese. English field labels: Title / Author / Date / Type / Source / Duration / Quality (Quality default value "Brute").
+
+Deliverable now: the phased plan only (rational, independently-testable phases) plus any open questions, for my approval. No code until I approve.

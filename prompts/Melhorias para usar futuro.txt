@@ -1,0 +1,41 @@
+7 - adicionar um aviso na primeira linha dizendo que é importante verificar estas instalações antes de começar
+
+8 - oportunidade de abrir os MDs com notebook ++
+
+9 - how the application handles the update in the applications installed ? 
+
+10 - when error in yt transcription or yt download the app shall output the links for the user
+
+11 - connect with nord vpn account ? several blockings from download transcription happening. maybe a solution in gut hub ? 
+
+12 - less than 10 minutes, classify as "short"
+
+13 -add button to open output folder using windows explorer
+
+14 - include header in the yt download shall be clikable only if the transcription check ox is marked. 
+
+15 - add header option in english
+
+16 - when click on browse it should open the current folder in the browser filed, not the last folder accessed by windows explorer. 
+
+17 - maybe when transcribing the app runs a search in youtube and capture the link
+
+18  algun icone animado equanto o applicativo roda pra facilitar
+
+19 FFMpeg is installing in C inside whisper_transcriber, maybe we should change
+
+20 adicionar uma inteligencia que se o video do yt for members only ele pinta de vermelho no queue e diz que video é members only
+
+21 link can be extracted from the video metadata
+
+- Mandar um email ou um aviso dizendo que o job foi terminado. Configurar em settings. 
+
+- VPN (?)
+
+- aplicativo pergunta se quero deletar o queue mesmo se os arquivos ainda estao pendentes de serem processados. O procesamento deu erro e cancelei o processo e o primeiro arquivo mostra erro (bloqueio de IP) e os demais 9 arquivos demonstram "pending" e não conseguir adicionar um link a mais. Revisar. Talvez criar um botão (Adicionar mesmo assim) na janela que me impede de seguir
+
+- caso o output folder estiver apontado para um folder que nao existe, o application quando peço para iniciar o processo deve me perguntar se quero criar o folder ou entao cancelar o processo.  
+
+- hability to organize by lenght or name in the queue
+
+- adicionar ao queue somente videos maiores que X minutos

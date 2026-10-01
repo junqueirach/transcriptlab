@@ -1,0 +1,124 @@
+You are revising TranscriptLab, my single-file Python 3.12 / Tkinter Windows desktop app (current file: TranscriptLab_v_0_10_5.py in the project). Target version: v0.11.0.
+
+Do NOT write code yet. First read the current file, then produce a phased implementation plan (numbered, with blocking questions listed separately). Wait for my explicit "Approved" before generating any code.
+
+Standing constraints (apply to every change):
+- Single .py file; surgical str_replace edits only, no rewrites.
+- Bump APP_VERSION to 0.11.0; app title/header must reflect it.
+- Every user-facing string added or changed must exist in BOTH PT-BR and EN (TRANSLATIONS["pt"] and TRANSLATIONS["en"]), and survive live language switching.
+- MD metadata header labels stay in Portuguese regardless of UI language.
+- Before delivery: headless GUI tests under xvfb + unittest must all pass; mock all YouTube / Whisper / network / subprocess / SMTP paths. Zero known bugs at delivery.
+- Ask at most 1-3 short clarifying questions, only for genuine ambiguity.
+
+ITEM 1 — Unified, portable external-tool management (bug fix + redesign)
+
+Problem: tool detection (FFmpeg, MarkItDown, yt-dlp, Whisper) is unreliable and buggy.
+Observed failures:
+a) Moving the app to another drive (e.g. D:) breaks recognition of MarkItDown, FFmpeg and Whisper — config.json likely stores absolute paths from the old location, and detection does not recover.
+b) On a fresh PC, installing MarkItDown through the app still shows "not found" after install — the probe checks a different Python interpreter than the one pip installed into.
+
+Required outcome:
+1.1 Audit every detection/probe function (find_ffmpeg, markitdown_is_available, markitdown_python resolution, whisper venv checks, yt-dlp probe) and document the root cause of (a) and (b) in the plan before proposing fixes.
+1.2 Adopt a PORTABLE model: all four tools live in a single app-managed "tools" folder next to the .py — pip-based tools (MarkItDown, yt-dlp, youtube-transcript-api) in one shared venv there; Whisper keeps its own isolated venv inside the same tools folder; FFmpeg binaries unzipped there.
+Config stores paths RELATIVE to the app folder so moving the whole folder to another drive or PC keeps everything working. Provide a migration path for my existing installs (detect old global installs, offer one-click reinstall into the tools folder).
+1.3 Whisper specifics: model download/management (the existing model catalog UI) must keep working under the portable model — models stored inside the tools folder (not %USERPROFILE%\.cache) so they move with the app.
+1.4 Updating: every tool's settings dialog gets an "Update" action (pip install -U for pip tools; re-download latest build for FFmpeg), with current-version display before/after. Today no tool can be updated — fix that.
+The Update button is enabled only when 1.7 has found a newer version, and shows "current → latest" before running.
+1.5 One standardized Settings dialog layout for ALL four tools, each containing:
+    - Status line showing detected install folder + version (auto-captured, refreshed live)
+    - "Install..." — asks me where to install, pre-filled with the suggested standard tools folder
+    - "Update" button (per 1.4)
+    - "Check for updates" button (per 1.7)
+    - "Re-check" button — re-runs detection from scratch
+    - "Locate..." button — manual folder/exe picker
+    - "Uninstall / Remove" button — deletes the app-managed install (with confirm)
+    - "Open folder" button
+1.6 Detection order: my configured path → app tools folder → system PATH / known locations. Stored paths that no longer exist must be silently discarded and re-detection attempted, never shown as "installed". Post-install verification must use the exact interpreter/executable the install targeted.
+1.7 Update checking (MANUAL ONLY — never automatic, never on startup): a "Check for updates" action that queries the latest available version of every managed tool (PyPI for MarkItDown, yt-dlp, youtube-transcript-api, Whisper; the FFmpeg build source for FFmpeg), compares against the installed version, and reports per tool: "up to date" or "update available: X → Y" with a clickable Update. Available in two places: the per-tool button inside each standardized settings dialog (1.5), and one "Check all tools for updates" entry in the Settings menu that opens a summary dialog listing all four tools with their status and individual Update buttons. Checks run in a background thread (UI never freezes), have a network timeout, and fail gracefully offline ("could not check — no connection"). Network calls only happen when I click. All network calls mocked in tests.
+
+ITEM 2 — Embed source metadata into files downloaded by yt-dlp
+
+When the Download tab downloads video or audio, embed the source metadata as tags in the file itself: title, upload date, duration, source URL, description, uploader/channel. Embedded tags only — no sidecar files. Remove from the format choices any container that cannot reliably hold embedded tags (e.g. WAV), in both languages, so every offered format supports tagging. No network calls beyond what
+yt-dlp already makes.
+
+ITEM 3 — Tag-first MD header on transcription
+
+When transcribing a local file (Whisper path), fill the 7-field MD header primarily from the file's embedded tags. Mapping: Título ← title, Data ← upload
+date, Fonte ← source URL, Duração ← duration (existing format). Any field missing from tags falls back to the current strategy for that field. Do NOT read sidecar files. Qualidade is never derived from tags — it stays exactly as I configured it. Files with no tags behave exactly as today (zero regression).
+
+ITEM 4 — Queue keyboard handling (all queue Treeviews, all tabs)
+
+- DEL key deletes the selected entries (same rules as the existing remove button: respect processing state).
+- Shift+Up/Down and Shift+PageUp/PageDown extend the selection (standard multi-select keyboard behavior).
+
+ITEM 5 — Right-click "Copy link" on queue entries
+
+On any queue whose entries are links (YouTube Transcription, Download, etc.), right-clicking an entry opens a context menu with "Copy link" that puts that
+entry's URL on the clipboard, so I can check the video myself.
+
+ITEM 6 — Fix selection stealing during queue population
+
+Bug: while the app is still adding/expanding entries into a queue (e.g. playlist expansion or link reading) and I am selecting items to remove, every newly added entry clears/steals my current selection. Fix: inserting new rows must preserve the user's existing selection, focus, and scroll position.
+
+ITEM 7 — Queue persistence across app restarts
+
+All queues in all tabs are saved on app close and restored on next launch (links, per-item metadata, statuses). Items that were mid-processing when the
+app closed are restored as pending; done and errored items are restored with their statuses. Use stable item_id fields, not positional indices. Store in
+config.json or a companion state file next to it — your call, justify in plan.
+
+ITEM 8 — Settings/General toggles for batch protections
+
+Two new opt-out settings in Settings → General, both default ON (current behavior), persisted in config:
+8.1 "Warn when many videos are queued" — turns off the large-batch warning popup for YouTube transcript download and video/audio download.
+8.2 "Limit batches to 150 items" — turns off the hard 150-item cap entirely.
+    Rationale: I rotate VPN endpoints when blocked, so I manage block risk myself. When OFF, no cap and no cap dialog.
+
+Deliverable of this session: root-cause findings (1.1), then the phased plan covering Items 1–8. Then wait for "Approved".
+
+ 
+ITEM 9. If a video's duration is under 10:00, set header Type/Tipo to "Short". Duration-based only.
+
+ITEM 10. YouTube Download tab: "Define Header" enabled only when "Transcribe video after download" is checked; grayed out otherwise.
+
+ITEM 11. Any Browse button opens its dialog at the folder currently shown in that browse field, not the last folder used by Windows Explorer.
+
+ITEM 12. Members-only detection: before processing each queued YouTube item (transcription or download), probe it; if members-only, paint that row red and label it "members only". If left in the queue, skip it. Add a probe timeout so detection cannot hang the queue; the probe must honor item 5's sleep/rate settings and be individually skippable.
+
+ITEM 13. Link Grabber tab: replace the three radio options (Title+Link / Link Only / Title+Duration+Link) with three checkboxes: "Video Title" (label "(may be slow)"), "Video Duration" (label "(may be very slow)"), "Video Link". Build output from whichever boxes are checked. Default: only "Video Link" checked. Delete the now-unused "Include duration" checkbox. Note the per-video duration probe here is reused by item 20.
+
+ITEM 14. Settings toggle to switch ALL headers between Portuguese and English globally; default Portuguese. English field labels: Title / Author / Date / Type / Source / Duration / Quality (Quality default value "Brute"). Make it in Settings / General
+
+ITEM 15. Three-way queue-replace dialog. Replace the current binary clear-finished dialog: when adding items to an already-finished queue, offer three choices — Keep old + add new / Delete all + add new / Cancel. Implement the missing Keep path: retain all existing rows; errored items reset to pending (re-runnable), done items stay done and are skipped on the next run, new items appended. Bilingual strings.
+
+ITEM 16. Universal filename-collision suffixing. Every file written by every tab (A/V transcripts, YouTube downloads, MD outputs, Link Grabber CSV/txt) must never overwrite: when a same-named file already exists in the destination, automatically append a numeric suffix (_1, _2, ...; first collision -> _1), with no prompt. This replaces the current A/V "duplicate transcript" confirmation dialog with silent auto-suffixing; extend/adjust the existing next_available_suffixed_stem helper (currently starts at _2) to this convention and reuse it across all tabs.
+
+ITEM 17. Click-header sort in every queue. Clicking a queue column header sorts the queue and rewrites processing order (renumbers the order column), Windows-Explorer-style: first click ascending, second click descending, on the Name column (Video/File) and on the Length/Duration column (and Size on the MD tab). Sort Length/Duration by underlying seconds, not the formatted string; unknown/"—" values sort last. Sorting is enabled only while the queue is idle (not processing).
+
+ITEM 18. Link Grabber duration-range filter. Add two independent, checkbox-gated bounds: "Minimum duration >= X" and "Maximum duration <= Y" (minutes). Either, both, or neither may be active; neither = all videos. Only videos satisfying the active bound(s) appear in results. Because this needs each candidate's duration, activating either bound forces the per-video duration probe (item 12's slow path) even if the "Video Duration" output box is unchecked — warn in the UI. While any bound is active, videos whose duration cannot be determined are excluded.
+
+ITEM 19. If possivle, add the capacity of the link grabber to gab all links of the channel. So if I input the youtube channel link, it grabs all video links in this channel. There are some websites that offer that for free and I would like to imnplement this in the application (if possible). 
+
+ITEM 20 — LAN status web page (remote monitoring)
+
+A built-in read-only status page so I can check what one laptop is doing from another on the same LAN.
+
+20.1 Server: stdlib-only ThreadingHTTPServer on a daemon thread. No external dependencies. Serves two routes: "/" (the HTML page) and "/api/status" (JSON snapshot).
+20.2 Settings (Settings → General or its own section), persisted in config:
+    - Enable/disable (default OFF; server starts/stops immediately on toggle,
+      no restart)
+    - Port (default 8080) and bind address (default 0.0.0.0)
+    - Optional access token: when enabled, requests without ?k=<token> get 403;
+      token auto-generated and shown in settings
+    - The settings dialog and the About tab display the reachable URL, e.g.
+      http://192.168.1.50:8080 (LAN IP resolved locally via the UDP-socket
+      trick — no external calls), plus a note that Windows Firewall must allow
+      inbound connections, with the exact command/instruction.
+    - If the port is busy or binding fails, show a clear error and leave the
+      feature disabled — never crash.
+20.3 Thread safety: strictly read-only. The Tk main thread maintains a status snapshot (plain dict) guarded by a threading.Lock, refreshed on its existing update cycle; the HTTP thread only reads the snapshot and NEVER touches Tk objects. No remote control actions in this version.
+20.4 /api/status JSON: app version, uptime, per-tab queue summary (pending/ running/done/error counts), currently processing item (name, progress %, ETA), overall batch ETA, last ~30 log lines of the active operation, and tool availability.
+20.5 Page: one self-contained HTML string embedded in the .py (inline CSS/JS, no CDN). Polls /api/status every 3 s. Shows hostname, app version, "updated Xs ago", and a visible banner when the connection is lost. Page text in the app's current UI language (both PT-BR and EN provided).
+20.6 Tests: server started on a random free port in unit tests, JSON schema verified, token rejection verified, page fetch verified — no Tk required for the HTTP layer.
+
+Ask questions if needed. 
+Deliverable now: the phased plan only (rational, independently-testable phases) plus any open questions, for my approval. No code until I approve.
