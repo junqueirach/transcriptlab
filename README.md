@@ -2,7 +2,9 @@
 
 **A local-first desktop workbench that turns audio, video, YouTube, podcasts and documents into clean Markdown, ready to be used as a corpus for a RAG system.**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) ![Python](https://img.shields.io/badge/Python-3.9%2B-blue) ![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) ![Python](https://img.shields.io/badge/Python-3.9%2B-blue) ![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey) [![CI](https://github.com/junqueirach/transcriptlab/actions/workflows/ci.yml/badge.svg)](https://github.com/junqueirach/transcriptlab/actions/workflows/ci.yml)
+
+<p align="center"><img src="docs/screenshots/transcriptlab.png" alt="TranscriptLab screenshot" width="900"></p>
 
 ## Why it exists
 
@@ -59,6 +61,10 @@ Only transcribe or download material you have the right to use. The repository c
 Built with **Claude (Anthropic)** as the coding partner. I wrote the requirements and the revision prompts, tested every build on real data, and decided what to fix next. The `archive/versions/` folder keeps every earlier release so the iteration history is visible.
 
 **Security note:** the app stores any API keys you enter in a local settings file outside this repository. `.gitignore` excludes config and settings files so keys are never committed.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Bug reports and ideas are welcome through the issue templates.
 
 ## Licence
 
