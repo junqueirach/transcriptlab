@@ -46,6 +46,10 @@ Other features: metadata header per Markdown file, ETA estimates learned from pa
 
 Whisper models run locally. Nothing is uploaded unless you turn on the optional Claude-assisted polish, which needs your own API key.
 
+## Next step: verify your corrections
+
+Speech-to-text output usually needs correcting before it becomes a corpus, and a correction can silently change or invent text. [tcqa](https://github.com/junqueirach/transcript-corpus-qa) is a small offline checker that proves a corrected transcript changed only what its log says, before the text goes into a RAG or fine-tuning corpus.
+
 ## Responsible use
 
 Only transcribe or download material you have the right to use. The repository contains code only; it ships no transcripts, recordings or corpus data.
